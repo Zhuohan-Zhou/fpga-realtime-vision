@@ -283,11 +283,12 @@ overlay_marker u_overlay (
 // continuously in parallel -- cheap enough, and avoids clock-enable/reset
 // gymnastics -- only the final mux picks what actually reaches the screen.
 //
-// Sobel disabled for now -- didn't fit (858/645 LABs) even after forcing
-// M9K ramstyle on the line buffers. Instance below is commented out rather
-// than removed so it's easy to bring back once the LAB overflow is sorted;
-// sobel_edge.v itself is unchanged. To re-enable: uncomment the instance,
-// restore the mux, re-add the VERILOG_FILE line in the qsf.
+// Sobel re-enabled: the LAB overflow (858/645) was actually caused by
+// sobel_edge.v's and motion_detector.v's memory reads being coded as
+// combinational (`wire = arr[idx]`), which can't map to M9K regardless of
+// ramstyle since M9K's read port is physically synchronous-only -- Quartus
+// was building an LE-based fake memory instead. Both modules now use
+// registered reads. Re-verify the LAB count after this recompile.
 wire [1:0] disp_mode;
 
 display_mode_select u_mode (
@@ -299,22 +300,68 @@ display_mode_select u_mode (
     .mode   (disp_mode)
 );
 
-wire [7:0] sobel_r, sobel_g, sobel_b;
-assign sobel_r = ov_r;   // placeholder while Sobel is disabled -- see note above
-assign sobel_g = ov_g;
-assign sobel_b = ov_b;
+// Gaussian blur ahead of Sobel: a bare gradient-magnitude threshold makes
+// an independent edge/no-edge call at every pixel, so any spot where local
+// contrast dips even briefly (sensor noise, soft lighting) breaks the
+// line -- smoothing first is the same reason a real Canny pipeline blurs
+// before it differentiates.
+wire [7:0]  blur_y8;
+wire [10:0] blur_px, blur_py;
+wire        blur_de;
 
-// sobel_edge u_sobel (
-//     .clk     (clk_9m),
-//     .rst_n   (sys_rst_n),
-//     .de      (lcd_de_w),
-//     .y8      (disp_y),
-//     .pixel_x (pixel_x_w),
-//     .pixel_y (pixel_y_w),
-//     .edge_r  (sobel_r),
-//     .edge_g  (sobel_g),
-//     .edge_b  (sobel_b)
-// );
+gaussian_blur3x3 u_blur (
+    .clk         (clk_9m),
+    .rst_n       (sys_rst_n),
+    .de          (lcd_de_w),
+    .y8_in       (disp_y),
+    .pixel_x     (pixel_x_w),
+    .pixel_y     (pixel_y_w),
+    .y8_out      (blur_y8),
+    .pixel_x_out (blur_px),
+    .pixel_y_out (blur_py),
+    .de_out      (blur_de)
+);
+
+// Sobel now only computes the raw gradient (magnitude + a quantized
+// direction); nms_thresh.v does non-max suppression along that direction
+// before thresholding. Plain "magnitude > threshold" used to light up the
+// whole shoulder of a real edge's gradient hill, not just the peak, which
+// is why lowering EDGE_THRESH alone made lines thicker -- NMS keeps only
+// each hill's local peak first, so line width stays ~1px regardless of
+// where the threshold is set (verified in tb_integration_nms.v).
+wire [12:0] sobel_mag;
+wire [1:0]  sobel_dir;
+wire [10:0] sobel_px, sobel_py;
+wire        sobel_de;
+
+sobel_edge u_sobel (
+    .clk         (clk_9m),
+    .rst_n       (sys_rst_n),
+    .de          (blur_de),
+    .y8          (blur_y8),
+    .pixel_x     (blur_px),
+    .pixel_y     (blur_py),
+    .magnitude   (sobel_mag),
+    .direction   (sobel_dir),
+    .pixel_x_out (sobel_px),
+    .pixel_y_out (sobel_py),
+    .de_out      (sobel_de)
+);
+
+wire [7:0] sobel_r, sobel_g, sobel_b;
+
+nms_thresh u_nms (
+    .clk       (clk_9m),
+    .rst_n     (sys_rst_n),
+    .de        (sobel_de),
+    .magnitude (sobel_mag),
+    .direction (sobel_dir),
+    .pixel_x   (sobel_px),
+    .pixel_y   (sobel_py),
+    .edge_r    (sobel_r),
+    .edge_g    (sobel_g),
+    .edge_b    (sobel_b)
+);
 
 wire [7:0] bin_r, bin_g, bin_b;
 

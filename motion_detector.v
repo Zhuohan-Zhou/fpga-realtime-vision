@@ -113,25 +113,59 @@ always @(posedge clk) begin
         col_sum[block_x] <= col_sum[block_x] + {9'd0, y8};
 end
 
-// flush-time compare/update (combinational on flush_col/flush_by)
+// flush-time compare/update. luma_mem's read here used to be a
+// combinational `wire = luma_mem[flush_addr]`, same problem as
+// sobel_edge.v's line buffers: M9K's read port is synchronous-only, so an
+// async read can't map to it no matter what ramstyle says, and Quartus
+// falls back to LE. Registering the read costs one cycle -- flush_addr_d1/
+// cur_avg_d1/flushing_d1 carry the matching column's address and running
+// average forward by that same cycle so the compare+write below stays
+// aligned with the delayed read. Adds 1 cycle to the 30-cycle flush
+// sequence (31 total), still comfortably inside the ~45-cycle h-blank gap.
 wire [8:0] flush_addr = flush_by * GRID_W + flush_col;
 wire [7:0] cur_avg    = col_sum[flush_col][16:8];   // /256, exact (max sum 65280)
-wire [7:0] old_avg    = luma_mem[flush_addr];
 
-wire signed [8:0] fd    = $signed({1'b0, cur_avg}) - $signed({1'b0, old_avg});
+reg        flushing_d1;
+reg [8:0]  flush_addr_d1;
+reg [7:0]  cur_avg_d1;
+reg [7:0]  old_avg;
+
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        flushing_d1   <= 1'b0;
+        flush_addr_d1 <= 9'd0;
+        cur_avg_d1    <= 8'd0;
+        old_avg       <= 8'd0;
+    end
+    else begin
+        flushing_d1 <= flushing;
+        if (flushing) begin
+            old_avg       <= luma_mem[flush_addr];
+            flush_addr_d1 <= flush_addr;
+            cur_avg_d1    <= cur_avg;
+        end
+    end
+end
+
+wire signed [8:0] fd    = $signed({1'b0, cur_avg_d1}) - $signed({1'b0, old_avg});
 wire        [7:0] fabsd = fd[8] ? (~fd[7:0] + 8'd1) : fd[7:0];
 wire              changed_now = (fabsd > DIFF_THRESH);
 
 always @(posedge clk) begin
-    if (flushing) begin
-        luma_mem[flush_addr]    <= cur_avg;
-        changed_mem[flush_addr] <= changed_now;
+    if (flushing_d1) begin
+        luma_mem[flush_addr_d1]    <= cur_avg_d1;
+        changed_mem[flush_addr_d1] <= changed_now;
     end
 end
 
-// display-side highlight: current pixel's cell, latest verdict
+// display-side highlight: current pixel's cell, latest verdict. Also a
+// registered read now -- shifts the highlight tint about 1 pixel column
+// behind the actual image, same order of magnitude as the 1-pixel latency
+// yuv422_to_rgb888 already has, not visible at video rate.
 wire [8:0] disp_addr = block_y * GRID_W + block_x;
-assign highlight = changed_mem[disp_addr];
+reg        highlight_r;
+always @(posedge clk) highlight_r <= changed_mem[disp_addr];
+assign highlight = highlight_r;
 
 // frame-level changed-cell count / motion flag
 reg [8:0] block_change_cnt;
@@ -147,7 +181,7 @@ always @(posedge clk or negedge rst_n) begin
         motion_detected  <= (block_change_cnt >= MIN_BLOCKS);
         block_change_cnt <= 9'd0;
     end
-    else if (flushing && changed_now) begin
+    else if (flushing_d1 && changed_now) begin
         block_change_cnt <= block_change_cnt + 9'd1;
     end
 end

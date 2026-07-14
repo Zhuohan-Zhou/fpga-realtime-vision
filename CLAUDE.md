@@ -2,11 +2,19 @@
 
 User: Kong. Quartus project: CameraCapture (this folder). Quartus Prime 25.1 Lite.
 
-## 状态(2026-07-10)
+## 状态(2026-07-14)
 **主线完成**:摄像头 → DVP → SDRAM乒乓 → LCD 实时显示,YUV422→RGB888 链路,画质已调优,用户确认"画面完美"。
 顶层 = `camera_display_top`。各阶段测试顶层保留:dvp_test_top / sdram_test_top / lcd_top / lcd_pattern_top / sd_test_top,切 TOP_LEVEL_ENTITY 即可复用。
 
-**三按钮模式选择(进行中)**:key1→Sobel边缘检测,key2→阈值二值化,key3→质心+运动追踪(默认)。Sobel因 Fitter LAB 超限(858 vs 645)暂时禁用——`sobel_edge.v` 实例在 camera_display_top.v 里注释掉,qsf 里对应 VERILOG_FILE 也注释掉,sobel_r/g/b 临时接到 ov_r/g/b(按key1退化成显示追踪画面,不会挂)。二值化+追踪已跑通仿真、按键消抖逻辑正确。按键引脚(key1_n/key2_n/key3_n=M15/M16/E16)已加入 qsf,待用户重新编译验证是否在645 LAB内。若仍超限需要 Quartus 的 Analysis & Synthesis Resource Usage Summary 逐模块排查,之前给 line_a/line_b/luma_mem/changed_mem 加 ramstyle="M9K" 那次修复对 LAB 数量没有任何变化,说明诊断大概率不对,不要重复假设是那几个大数组的问题。
+**三按钮模式选择**:key1→Sobel边缘检测,key2→阈值二值化,key3→质心+运动追踪(默认)。按键引脚(key1_n/key2_n/key3_n=M15/M16/E16,来自 AX4010 手册 Part13)已加入 qsf。
+
+**Sobel 前加了一级高斯模糊(gaussian_blur3x3.v)**:用户反馈"电脑上Sobel能描出完整人脸轮廓甚至痣,板子上连轮廓都描不完整"——原因是板上只有裸的单阈值 Sobel,没有电脑上 Canny 那一套(高斯模糊去噪+非极大值抑制+双阈值滞后连接),轮廓在光照弱的地方梯度本来就小,单点独立判断导致断线。先加了模糊这一步(3x3核 [1 2 1;2 4 2;1 2 1]/16,架构照抄 sobel_edge.v 已验证正确的同步读+延迟对齐写法),接在 disp_y 和 sobel_edge 之间,sobel_edge 现在吃 blur 模块延迟对齐后的 y8/pixel_x/y/de。仿真验证过(平坦帧不变、阶跃边缘处产生真实的中间过渡值,不是直通)。
+
+**非极大值抑制(NMS)已实现**:用户反馈"EDGE_THRESH调低了之后线条变粗"——原因是真实边缘的梯度幅值是个"小山包"(渐升到峰值再渐降,不是单点尖峰),单纯阈值判断会把山包两侧肩部一起点亮,阈值越低点亮的肩部越宽。修复:`sobel_edge.v` 改造成只算原始梯度,输出 `magnitude`(13位幅值)+ `direction`(2位方向桶:0=水平梯度/竖直边,1=对角"/",2=竖直梯度/水平边,3=对角"\\",用 |Gx| vs 2×|Gy| 的移位比较近似 atan2,不用除法器)+ 延迟对齐的 pixel_x_out/pixel_y_out/de_out,不再直接出 edge_r/g/b。新建 `nms_thresh.v` 接在 sobel_edge 后面:架构照抄 sobel_edge 的同步读行缓冲写法(2行幅值缓冲 mline_a/mline_b + 1行方向缓冲 dline_b——NMS只需要中心像素自己的方向,方向缓冲只需缓冲会成为窗口中心的那一行,不需要像幅值一样缓冲2行),3x3幅值窗口做好后,中心像素沿自己的梯度方向跟对应的两个邻居比较(比如方向=0/水平梯度就比左右邻居),`(m1d1 > nbr_a) && (m1d1 >= nbr_b)` 非对称比较(一边严格大于一边大于等于,专门处理阶跃边缘两个相邻像素幅值算出来正好相等的情况,否则会两个都判定为局部最大导致边缘变2像素宽——这个问题是集成测试时真实碰到并修复的,不是纸上假设),不是局部最大就抑制为0,最后再跟 EDGE_THRESH 比较。camera_display_top.v 里 sobel_edge → nms_thresh → 原来的 sobel_r/g/b 顶层 mux 位置,qsf 加了 nms_thresh.v。三个仿真全过(tb_sobel_edge.v 验证幅值+方向本身;tb_nms_thresh.v 用合成"山包"波形验证抑制效果;tb_integration_nms.v 把真实 sobel_edge+nms_thresh 串联,同一个阶跃边缘分别接低阈值(50)和高阈值(400)两个 nms_thresh 实例,验证两者边缘宽度都稳定在1像素——直接复现并验证修复了用户反馈的那个问题)。**用户还没编译验证效果**,理论上 LE/LAB 增量很小(方向缓冲只有2位宽,幅值缓冲480深×13位,远小于已用的 M9K 容量)。
+
+**LAB 超限问题已定位并修复(待用户编译验证)**:真正原因不是 M9K 推断"被拒绝",而是 `sobel_edge.v` 的 `line_a/line_b` 和 `motion_detector.v` 的 `luma_mem/changed_mem` 用的是组合逻辑读(`wire = arr[idx]`,同一拍内地址给出立刻拿到数据)。M9K 硬件的读端口物理上只支持同步读(这一拍给地址,下一拍数据才出来),组合读这种写法不管加不加 `ramstyle` 属性都不可能映射上 M9K——Quartus 只能老实地用几百个寄存器+一个巨大多路选择器在 LE 里"手搭"一个能瞬间查表的假内存,这正是吃掉几百上千 LE 的元凶。之前那次 ramstyle=M9K 的"修复"编译前后 LAB 数字一模一样(858),现在回头看就是因为它对组合读的场景根本不起作用。
+
+已修复:两个模块的内存读都改成寄存器化同步读,写端口相应延迟一拍对齐(sobel_edge.v 新增 la/lb/px_d1/py_d1/y8_d1/de_d1 延迟链;motion_detector.v 新增 flushing_d1/flush_addr_d1/cur_avg_d1 延迟链),仿真通过(tb_sobel_edge.v 调整了边缘位置容差 [8,12]→[8,13],因为整条流水线多了一拍;tb_motion_detector_v2.v 未改动即通过)。Sobel 已重新在 camera_display_top.v 和 qsf 里启用。**下一步:用户需要重新完整编译一次,确认 LAB 数量是否真的降到 645 以内**——如果还超,说明还有其他大头没找到,需要 Quartus 的 Analysis & Synthesis Resource Usage Summary 逐模块排查,不要再猜。
 
 ## 关键架构决定
 - 传感器输出 **YUV422(YUYV)**,不是 RGB565:8位亮度消除了 RGB565 的同心圆色带。0x4300=0x30, 0x501f=0x00

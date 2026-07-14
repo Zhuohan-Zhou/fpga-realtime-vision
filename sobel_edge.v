@@ -1,42 +1,29 @@
-// sobel_edge.v -- streaming 3x3 Sobel edge detector on the luma (y8) channel.
-//
-// Pixels arrive one at a time in raster order, so a 3x3 filter needs two
-// on-chip line buffers holding the previous two lines' luma (480x8-bit
-// each, ~3.75Kbit total). Each cycle: line_a (row N-2) <- line_b's old
-// value (row N-1), line_b (row N-1) <- incoming pixel (row N). Three
-// horizontal 3-tap shift regs (one per row) hold the live 3x3 neighborhood.
-//
-// Gx/Gy use only +-1/+-2 weights so the convolution is adds/subtracts/
-// shifts only, no multiplier. Magnitude = |Gx|+|Gy| (city-block approx of
-// sqrt(Gx^2+Gy^2), the usual choice for resource-constrained FPGA edge
-// detectors), thresholded to white-on-black.
-//
-// Top-left 2 rows/columns of every frame don't have a full 3x3 neighborhood
-// yet (buffers still filling) and get blanked to black -- normal for any
-// streaming 3x3 filter.
 module sobel_edge #(
-    parameter integer WIDTH       = 480,
-    parameter [11:0]  EDGE_THRESH = 12'd200   // tune: 0..~2040 (4*255 max per Gx/Gy)
+    parameter integer WIDTH = 480
 )(
     input             clk,      // clk_9m
     input             rst_n,
-    input             de,       // pixel valid strobe (lcd_de_w)
+    input             de,       // pixel valid strobe (from gaussian_blur3x3's de_out)
     input      [7:0]  y8,       // luma of the pixel at pixel_x/pixel_y now
     input      [10:0] pixel_x,  // 0..479
     input      [10:0] pixel_y,  // 0..271
 
-    output     [7:0]  edge_r,
-    output     [7:0]  edge_g,
-    output     [7:0]  edge_b
+    // Raw gradient only -- thresholding used to happen right here, but
+    // that's what made low EDGE_THRESH values draw fat lines (see
+    // nms_thresh.v): a real edge's gradient magnitude ramps up and back
+    // down like a hill, not a single spike, so a plain "> threshold" test
+    // lights up every pixel on the shoulder of that hill, not just the
+    // peak. nms_thresh.v does non-max suppression along the gradient
+    // direction first (keep only the local peak), then thresholds.
+    output     [12:0] magnitude,
+    output     [1:0]  direction,     // 0=horizontal grad (vert. edge), 1=diag "/", 2=vertical grad (horiz. edge), 3=diag "\"
+    output     [10:0] pixel_x_out,
+    output     [10:0] pixel_y_out,
+    output            de_out
 );
 
-// two-line rotating buffer. Force M9K: with a combinational read port,
-// Quartus can fall back to LE-based distributed storage + a wide address
-// mux for a 480-deep array, which costs way more than the ~4Kbit of actual
-// data (the mux alone can hit four figures of LEs). ramstyle forces M9K
-// regardless of coding-style ambiguity.
-(* ramstyle = "M9K" *) reg [7:0] line_a [0:WIDTH-1];   // row N-2 (relative to the incoming row)
-(* ramstyle = "M9K" *) reg [7:0] line_b [0:WIDTH-1];   // row N-1
+reg [7:0] line_a [0:WIDTH-1];   // row N-2 (relative to the incoming row)
+reg [7:0] line_b [0:WIDTH-1];   // row N-1
 
 integer init_i;
 initial begin
@@ -46,17 +33,48 @@ initial begin
     end
 end
 
-wire [7:0] la = line_a[pixel_x];
-wire [7:0] lb = line_b[pixel_x];
+// registered read + a matching one-cycle-delayed copy of everything else,
+// so the write-back below and the shift register further down both work
+// off signals that are consistently one cycle behind the live inputs.
+reg [7:0]  la, lb;
+reg [10:0] px_d1, py_d1;
+reg [7:0]  y8_d1;
+reg        de_d1;
 
-always @(posedge clk) begin
-    if (de) begin
-        line_a[pixel_x] <= lb;   // old row N-1 becomes row N-2 for the next line
-        line_b[pixel_x] <= y8;   // current row becomes row N-1 for the next line
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        de_d1 <= 1'b0;
+        la    <= 8'd0;
+        lb    <= 8'd0;
+        px_d1 <= 11'd0;
+        py_d1 <= 11'd0;
+        y8_d1 <= 8'd0;
+    end
+    else begin
+        de_d1 <= de;
+        if (de) begin
+            la    <= line_a[pixel_x];
+            lb    <= line_b[pixel_x];
+            px_d1 <= pixel_x;
+            py_d1 <= pixel_y;
+            y8_d1 <= y8;
+        end
     end
 end
 
-// 3x3 window: 3 rows x 3-tap horizontal shift regs.
+// write-back one cycle after the read of the same column: la/lb read
+// port and this write port land on different addresses on any given
+// cycle (write trails read by one column), so this is an ordinary
+// simple-dual-port access, exactly what M9K expects.
+always @(posedge clk) begin
+    if (de_d1) begin
+        line_a[px_d1] <= lb;     // old row N-1 becomes row N-2
+        line_b[px_d1] <= y8_d1;  // current row becomes row N-1
+    end
+end
+
+// 3x3 window: 3 rows x 3-tap horizontal shift regs, gated by de_d1 to
+// match la/lb/y8_d1's timing (one cycle behind de/pixel_x/pixel_y).
 // p0 = top row (line_a), p1 = mid row (line_b), p2 = bottom row (incoming
 // y8). d2 = 2 pixels ago (left), d0 = current (right).
 reg [7:0] p0d2, p0d1, p0d0;
@@ -69,10 +87,10 @@ always @(posedge clk or negedge rst_n) begin
         p1d2<=0; p1d1<=0; p1d0<=0;
         p2d2<=0; p2d1<=0; p2d0<=0;
     end
-    else if (de) begin
+    else if (de_d1) begin
         p0d2 <= p0d1; p0d1 <= p0d0; p0d0 <= la;
         p1d2 <= p1d1; p1d1 <= p1d0; p1d0 <= lb;
-        p2d2 <= p2d1; p2d1 <= p2d0; p2d0 <= y8;
+        p2d2 <= p2d1; p2d1 <= p2d0; p2d0 <= y8_d1;
     end
 end
 
@@ -89,19 +107,34 @@ wire signed [11:0] gy =
 
 wire [11:0] abs_gx = gx[11] ? (~gx + 12'd1) : gx;
 wire [11:0] abs_gy = gy[11] ? (~gy + 12'd1) : gy;
-wire [12:0] magnitude = {1'b0, abs_gx} + {1'b0, abs_gy};
+wire [12:0] mag_raw = {1'b0, abs_gx} + {1'b0, abs_gy};
 
-// Need 2 full lines of real history before the 3x3 window is valid; blank
-// the border otherwise. x threshold is 3, not 2: p0d0<=la happens the same
-// cycle pixel_x is asserted but only ripples into d1/d2 on later cycles, so
-// at pixel_x==2 the d2 tap still holds the previous line's trailing sample,
-// not this line's column 0 -- caught in simulation (tb_sobel_edge.v) as
-// false edges at x==2 on every row before this fix.
-wire window_valid = (pixel_x >= 11'd3) && (pixel_y >= 11'd2);
-wire is_edge = window_valid && (magnitude > {1'b0, EDGE_THRESH});
+// Cheap direction bucket, no atan2/divider: compare |Gx| and |Gy| against
+// 2x each other (~26.6/63.4 deg boundaries, close enough to the classic
+// 22.5/67.5 split for picking which pair of the 8 neighbors to compare
+// against in nms_thresh.v -- same shift/add-only philosophy as the rest
+// of this pipeline). same_sign picks which of the two diagonals.
+wire gx_dominant = (abs_gx >= (abs_gy <<< 1));
+wire gy_dominant = (abs_gy >= (abs_gx <<< 1));
+wire same_sign   = (gx[11] == gy[11]);
 
-assign edge_r = is_edge ? 8'd255 : 8'd0;
-assign edge_g = is_edge ? 8'd255 : 8'd0;
-assign edge_b = is_edge ? 8'd255 : 8'd0;
+wire [1:0] dir_code = gy_dominant ? 2'd2 :
+                       gx_dominant ? 2'd0 :
+                       same_sign   ? 2'd1 : 2'd3;
+
+// Need 2 full lines of real history before the 3x3 window is valid; force
+// magnitude to 0 on the border instead of passing a bogus value through --
+// 0 can never look like a local max in nms_thresh.v, so the border stays
+// blanked without needing a separate "valid" flag downstream. Compares
+// against px_d1/py_d1 (the delayed coordinate), not the live pixel_x/
+// pixel_y, since that's the frame of reference the window content lags
+// behind now.
+wire window_valid = (px_d1 >= 11'd3) && (py_d1 >= 11'd2);
+
+assign magnitude    = window_valid ? mag_raw : 13'd0;
+assign direction    = dir_code;
+assign pixel_x_out  = px_d1;
+assign pixel_y_out  = py_d1;
+assign de_out       = de_d1;
 
 endmodule
