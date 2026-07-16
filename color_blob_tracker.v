@@ -1,17 +1,30 @@
-// color_blob_tracker.v -- streaming color-threshold blob detection + centroid
-// tracking (v2). v1 was just per-pixel RGB threshold -> frame-sum -> divide
-// once per frame. v2 adds two things on top:
+// color_blob_tracker.v -- streaming color-threshold blob detection +
+// Kalman-filtered centroid tracking (v3).
 //
-//  1) EMA smoothing on the reported centroid: cx/cy move 1/2^EMA_SHIFT of the
-//     way toward the new measurement each frame instead of snapping to it.
-//     Kills frame-to-frame jitter from sensor/threshold noise without adding
-//     noticeable lag at video rate.
+// v1 was per-pixel RGB threshold -> frame-sum -> divide once per frame.
+// v2 added EMA smoothing plus a search window locked onto the last
+// position. v3 replaces the EMA with two independent 1D steady-state
+// Kalman ("alpha-beta") filters (kalman_1d.v), one per axis, which buys
+// two real improvements over EMA:
 //
-//  2) A search window centered on the last known (smoothed) position: once
-//     locked on, only pixels within +/-WINDOW_HALF of cx/cy count toward the
-//     next centroid, so same-color clutter elsewhere can't drag it off the
-//     real object. If the window's pixel count drops below MIN_PIXELS (track
-//     lost), the next frame falls back to a full-frame search to reacquire.
+//  1) A motion model. EMA just blends toward the new measurement by a
+//     fixed fraction every frame, with no notion of "which way is it
+//     moving". The Kalman filters track position AND velocity, so the
+//     predicted position for the next frame extrapolates along the
+//     target's actual heading instead of always lagging behind it, and
+//     the search window (now centered on that prediction, not the last
+//     smoothed position) tracks ahead of a moving target.
+//
+//  2) Outlier rejection. If a same-color object other than the tracked
+//     one appears (e.g. a face showing up inside the same red threshold
+//     bracket used for a red object), its raw centroid can be far from
+//     where the real target is predicted to be. gate_reject below checks
+//     the (Manhattan) distance between the raw measurement and the
+//     current prediction once we're actually locked onto something; too
+//     far and the measurement is ignored for this frame -- the filters
+//     just coast on their motion model instead of snapping to the
+//     distractor. This is what actually fixes the crosshair jumping
+//     between objects; Kalman smoothing alone would not have.
 //
 // Runs in clk_9m, tapping the same r8/g8/b8 (post yuv422_to_rgb888) and
 // pixel_x/pixel_y (from lcd_driver) that already feed the display.
@@ -22,9 +35,13 @@ module color_blob_tracker #(
     parameter [7:0]  G_HI = 8'd110,
     parameter [7:0]  B_LO = 8'd0,
     parameter [7:0]  B_HI = 8'd110,
-    parameter [17:0] MIN_PIXELS  = 18'd40,  // noise floor to call it "found"
-    parameter [10:0] WINDOW_HALF = 11'd70,  // search-window half-size once locked on
-    parameter integer EMA_SHIFT  = 2        // smoothing time-constant (bigger = smoother/slower)
+    parameter [17:0] MIN_PIXELS   = 18'd40,  // noise floor to call a frame "matched"
+    parameter [10:0] WINDOW_HALF  = 11'd70,  // search-window half-size once locked on
+    parameter integer FRAC_BITS   = 5,       // kalman_1d.v fixed-point fractional bits
+    parameter integer ALPHA_SHIFT = 2,       // kalman_1d.v position gain = 1/2^ALPHA_SHIFT
+    parameter integer BETA_SHIFT  = 5,       // kalman_1d.v velocity gain = 1/2^BETA_SHIFT
+    parameter [10:0] GATE_DIST    = 11'd90,  // max plausible per-frame jump (L1, px) once locked on
+    parameter integer MISS_LIMIT  = 15       // consecutive missed/rejected frames before "lost"
 )(
     input             clk,          // clk_9m
     input             rst_n,
@@ -37,12 +54,14 @@ module color_blob_tracker #(
     input      [10:0] pixel_x,      // 0..479
     input      [10:0] pixel_y,      // 0..271
 
-    output reg [10:0] cx,           // smoothed, displayed centroid
-    output reg [10:0] cy,
-    output reg        blob_found,   // 1 = last frame had >= MIN_PIXELS matches
+    output     [10:0] cx,           // Kalman-filtered, displayed centroid
+    output     [10:0] cy,
+    output reg        blob_found,   // 1 = currently locked on (see MISS_LIMIT)
     output reg        cx_valid,     // 1-cycle pulse: cx/cy just updated
     output reg [17:0] blob_pixels   // debug: matching pixel count, last frame
 );
+
+wire [10:0] pred_x, pred_y;   // this frame's predicted position, held for the whole frame
 
 // per-pixel color threshold (combinational)
 wire in_range = (r8 >= R_LO) && (r8 <= R_HI) &&
@@ -50,9 +69,10 @@ wire in_range = (r8 >= R_LO) && (r8 <= R_HI) &&
                 (b8 >= B_LO) && (b8 <= B_HI);
 
 // search-window gate: full frame when not locked on, a box around the
-// last smoothed position once we are
-wire signed [11:0] wdx = $signed({1'b0, pixel_x}) - $signed({1'b0, cx});
-wire signed [11:0] wdy = $signed({1'b0, pixel_y}) - $signed({1'b0, cy});
+// KALMAN PREDICTION for this frame once we are -- ahead of a moving
+// target instead of centered on where it was last seen.
+wire signed [11:0] wdx = $signed({1'b0, pixel_x}) - $signed({1'b0, pred_x});
+wire signed [11:0] wdy = $signed({1'b0, pixel_y}) - $signed({1'b0, pred_y});
 wire signed [11:0] win_half_s = $signed({1'b0, WINDOW_HALF});
 wire in_window = (!blob_found) ||
                  ((wdx >= -win_half_s) && (wdx <= win_half_s) &&
@@ -82,7 +102,7 @@ always @(posedge clk or negedge rst_n) begin
     end
 end
 
-// shared sequential divider (time-multiplexed X then Y)
+// shared sequential divider (time-multiplexed X then Y), unchanged from v2
 reg        div_start;
 reg [31:0] div_dividend, div_divisor;
 wire       div_busy, div_done;
@@ -99,29 +119,52 @@ seq_divider #(.WIDTH(32)) u_div (
     .quotient (div_quotient)
 );
 
-localparam S_WAIT  = 2'd0,
-           S_DIV_X = 2'd1,
-           S_DIV_Y = 2'd2;
+// Two independent axis filters. Both always receive the SAME predict/
+// update/accept/force_reset pulses -- the accept/reject decision below is
+// computed once, from both axes together (real 2D distance), not as two
+// per-axis decisions that could disagree about the same detection.
+reg        k_predict, k_update, k_accept, k_reset;
+reg [10:0] mx_reg, my_reg;
 
-reg [1:0]  state;
+kalman_1d #(.FRAC_BITS(FRAC_BITS), .ALPHA_SHIFT(ALPHA_SHIFT), .BETA_SHIFT(BETA_SHIFT)) u_kx (
+    .clk (clk), .rst_n (rst_n),
+    .predict (k_predict), .update (k_update),
+    .accept  (k_accept),  .force_reset (k_reset),
+    .meas    (mx_reg),
+    .pred_pos (pred_x), .pos (cx)
+);
+
+kalman_1d #(.FRAC_BITS(FRAC_BITS), .ALPHA_SHIFT(ALPHA_SHIFT), .BETA_SHIFT(BETA_SHIFT)) u_ky (
+    .clk (clk), .rst_n (rst_n),
+    .predict (k_predict), .update (k_update),
+    .accept  (k_accept),  .force_reset (k_reset),
+    .meas    (my_reg),
+    .pred_pos (pred_y), .pos (cy)
+);
+
+localparam S_WAIT    = 3'd0,
+           S_DIV_X   = 3'd1,
+           S_DIV_Y   = 3'd2,
+           S_APPLY   = 3'd3,
+           S_NO_MEAS = 3'd4;
+
+reg [2:0]  state;
 reg [31:0] cap_sum_y;
 reg [17:0] cap_count;
+reg [7:0]  miss_streak;
 
-// EMA blend: new = old + (raw - old) / 2^EMA_SHIFT, done in a wide signed
-// temporary then truncated back. Result is always a convex combination of
-// two valid 0..479-ish values, so it can't leave the valid range.
-//
-// Exception: if we weren't locked on going into this measurement
-// (blob_found==0, fresh reacquisition), snap straight to the raw
-// measurement instead of blending. Otherwise the window gate (still
-// centered on the stale position) can keep excluding the object we just
-// reacquired -- a slow tug-of-war instead of a clean reacquire.
-wire signed [11:0] cx_raw_s = $signed({1'b0, div_quotient[10:0]});
-wire signed [11:0] cy_raw_s = $signed({1'b0, div_quotient[10:0]});
-wire signed [11:0] cx_err   = cx_raw_s - $signed({1'b0, cx});
-wire signed [11:0] cy_err   = cy_raw_s - $signed({1'b0, cy});
-wire signed [11:0] cx_new_s = blob_found ? ($signed({1'b0, cx}) + (cx_err >>> EMA_SHIFT)) : cx_raw_s;
-wire signed [11:0] cy_new_s = blob_found ? ($signed({1'b0, cy}) + (cy_err >>> EMA_SHIFT)) : cy_raw_s;
+// Outlier gate: is this frame's raw color centroid anywhere near where the
+// tracked target is predicted to be? L1 (Manhattan) distance -- avoids a
+// square root, same city-block-distance approximation used for the Sobel
+// magnitude elsewhere in this project. Only applied once actually locked
+// on (blob_found) -- while reacquiring after a loss there's no prediction
+// worth trusting yet, so take whatever's found.
+wire signed [11:0] gdx = $signed({1'b0, mx_reg}) - $signed({1'b0, pred_x});
+wire signed [11:0] gdy = $signed({1'b0, my_reg}) - $signed({1'b0, pred_y});
+wire        [11:0] gdx_abs = gdx[11] ? (~gdx + 12'd1) : gdx;
+wire        [11:0] gdy_abs = gdy[11] ? (~gdy + 12'd1) : gdy;
+wire        [12:0] gdist   = gdx_abs + gdy_abs;
+wire               gate_reject = blob_found && (gdist > {1'b0, GATE_DIST});
 
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -131,20 +174,29 @@ always @(posedge clk or negedge rst_n) begin
         div_start    <= 1'b0;
         div_dividend <= 32'd0;
         div_divisor  <= 32'd0;
-        cx           <= 11'd0;
-        cy           <= 11'd0;
+        mx_reg       <= 11'd0;
+        my_reg       <= 11'd0;
         blob_found   <= 1'b0;
         cx_valid     <= 1'b0;
         blob_pixels  <= 18'd0;
+        miss_streak  <= 8'd0;
+        k_predict    <= 1'b0;
+        k_update     <= 1'b0;
+        k_accept     <= 1'b0;
+        k_reset      <= 1'b0;
     end
     else begin
         div_start <= 1'b0;
         cx_valid  <= 1'b0;
+        k_predict <= 1'b0;
+        k_update  <= 1'b0;
 
         case (state)
             S_WAIT: begin
                 if (frame_pulse) begin
                     blob_pixels <= count;
+                    k_predict   <= 1'b1;   // extrapolate last frame's state forward,
+                                            // held in pred_x/pred_y for this whole frame
 
                     if (count >= MIN_PIXELS) begin
                         cap_sum_y    <= sum_y;
@@ -155,14 +207,14 @@ always @(posedge clk or negedge rst_n) begin
                         state        <= S_DIV_X;
                     end
                     else begin
-                        blob_found <= 1'b0;   // too few matching px: no blob
+                        state <= S_NO_MEAS;
                     end
                 end
             end
 
             S_DIV_X: begin
                 if (div_done) begin
-                    cx           <= cx_new_s[10:0];   // EMA-smoothed
+                    mx_reg       <= div_quotient[10:0];
                     div_dividend <= cap_sum_y;
                     div_divisor  <= {14'd0, cap_count};
                     div_start    <= 1'b1;
@@ -172,11 +224,39 @@ always @(posedge clk or negedge rst_n) begin
 
             S_DIV_Y: begin
                 if (div_done) begin
-                    cy         <= cy_new_s[10:0];     // EMA-smoothed
-                    blob_found <= 1'b1;
-                    cx_valid   <= 1'b1;
-                    state      <= S_WAIT;
+                    my_reg <= div_quotient[10:0];
+                    state  <= S_APPLY;
                 end
+            end
+
+            S_APPLY: begin
+                k_update <= 1'b1;
+                k_accept <= !gate_reject;
+                k_reset  <= !gate_reject && !blob_found;  // fresh lock-on: snap, don't blend
+
+                if (!gate_reject) begin
+                    blob_found  <= 1'b1;
+                    miss_streak <= 8'd0;
+                end
+                else begin
+                    miss_streak <= miss_streak + 8'd1;
+                    if (miss_streak + 8'd1 >= MISS_LIMIT)
+                        blob_found <= 1'b0;
+                end
+                cx_valid <= 1'b1;
+                state    <= S_WAIT;
+            end
+
+            S_NO_MEAS: begin
+                // no color match at all this frame -- coast on the motion
+                // model rather than freezing or vanishing outright.
+                k_update <= 1'b1;
+                k_accept <= 1'b0;
+                k_reset  <= 1'b0;
+                miss_streak <= miss_streak + 8'd1;
+                if (miss_streak + 8'd1 >= MISS_LIMIT)
+                    blob_found <= 1'b0;
+                state <= S_WAIT;
             end
 
             default: state <= S_WAIT;

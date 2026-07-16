@@ -109,7 +109,56 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[1] -entity sccb_
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[2] -entity sccb_top_test
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[3] -entity sccb_top_test
 set_global_assignment -name VERILOG_FILE cam_init_top.v
+# Switched back to camera_display_top for the camera->BNN->7-segment
+# integration work (roi_binarize_28x28.v/seg7_decoder.v below). Leftover
+# from the bnn_demo_top real-hardware validation run further down this
+# file -- that demo is done and confirmed working, see CLAUDE.md.
 set_global_assignment -name TOP_LEVEL_ENTITY camera_display_top
+
+# bnn_core.v (binarized CNN). It is instantiated by camera_display_top.v
+# for the live camera -> ROI -> BNN -> 7-segment pipeline, and remains in
+# the file list so it can also be synthesized on its own for a resource
+# usage check:
+#   1. Temporarily change the TOP_LEVEL_ENTITY line above to bnn_core
+#   2. Processing > Start > Start Analysis & Synthesis ONLY -- do NOT run a
+#      full Compile. bnn_core's image_in port is 784 bits wide (28x28 test
+#      image, meant to be driven by a testbench, not real pins); the Fitter
+#      stage will fail trying to assign 784+ pins to a device that doesn't
+#      have anywhere near that many I/O. Analysis & Synthesis alone doesn't
+#      need pin assignment to succeed and will still produce the Resource
+#      Usage Summary (LEs/registers/memory bits) -- same report already
+#      used earlier this project to diagnose the LAB overflow.
+#   3. Change TOP_LEVEL_ENTITY back to camera_display_top afterward. (Done
+#      here -- confirmed real Analysis & Synthesis results after the
+#      row-memory rewrite: 2,860 LE / ~28% of the 10,320 LE budget, down
+#      from the first version's 5,776 LE. See CLAUDE.md.)
+set_global_assignment -name VERILOG_FILE bnn_core.v
+
+# bnn_demo_top.v (real-hardware validation demo for bnn_core.v, its own
+# standalone top-level, separate from both camera_display_top and the
+# bnn_core-as-TOP_LEVEL_ENTITY resource check above). Unlike bnn_core.v
+# alone, this one has a normal small pin list (clk/rst_n/key1_n/led[3:0] --
+# 7 pins total) so it CAN go through a full Compile and actually be
+# programmed onto the board:
+#   1. Temporarily change the TOP_LEVEL_ENTITY line above to bnn_demo_top
+#   2. Processing > Start > Start Compilation (full compile this time --
+#      Fitter will succeed, this module's port list is tiny)
+#   3. Program the board. It auto-classifies test image 0 on power-up (LEDs
+#      should show 0111 = 7 within well under a second, no button needed),
+#      then KEY1 (the same physical button as key1_n/PIN_M15) advances
+#      through 6 more real MNIST test images, wrapping back to image 0
+#      after the last one. Expected LED sequence (binary, LED3..LED0 =
+#      digit_out[3:0]): 7, 1, 0, 4, 9, 3, 6, back to 7 -- that "6" on the
+#      7th image is not a bug, it's the same deliberate misclassification
+#      (true label 2) that tb_bnn_core.v already exercises; seeing the
+#      board reproduce that exact wrong answer (not some other value) is
+#      actually the strongest confirmation that real silicon matches
+#      simulation bit-for-bit, not just on the easy cases.
+#   4. Change TOP_LEVEL_ENTITY back to camera_display_top afterward.
+# clk/rst_n/key1_n/led all reuse the SAME global (non -entity-scoped) pin
+# assignments already below (PIN_E1/PIN_N13/PIN_M15/PIN_E10,F9,C9,D9) --
+# no new location/IO_STANDARD assignments needed for this module.
+set_global_assignment -name VERILOG_FILE bnn_demo_top.v
 
 set_location_assignment PIN_E1 -to clk
 set_location_assignment PIN_N13 -to rst_n
@@ -229,38 +278,82 @@ set_location_assignment PIN_D12 -to sd_clk
 set_location_assignment PIN_F10 -to sd_mosi
 set_location_assignment PIN_E15 -to sd_miso
 
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to key_start
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sccb_scl
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sccb_sda
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[0]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[1]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[2]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[3]
+
+set_global_assignment -name VERILOG_FILE lcd_pattern_top.v
+set_global_assignment -name VERILOG_FILE yuv422_to_rgb888.v
+
+
+set_global_assignment -name VERILOG_FILE seq_divider.v
+set_global_assignment -name VERILOG_FILE kalman_1d.v
+set_global_assignment -name VERILOG_FILE color_blob_tracker.v
+set_global_assignment -name VERILOG_FILE overlay_marker.v
+# motion_detector.v / motion_overlay.v: no longer instantiated in
+# camera_display_top.v (per user request -- it never fed into the tracker
+# anyway, just an independent overlay). Files kept in the repo, just not
+# part of this build; uncomment to bring back.
+# set_global_assignment -name VERILOG_FILE motion_detector.v
+# set_global_assignment -name VERILOG_FILE motion_overlay.v
+
+set_global_assignment -name VERILOG_FILE button_debounce.v
+set_global_assignment -name VERILOG_FILE display_mode_select.v
+set_global_assignment -name VERILOG_FILE gaussian_blur3x3.v
+set_global_assignment -name VERILOG_FILE sobel_edge.v
+set_global_assignment -name VERILOG_FILE nms_thresh.v
+set_global_assignment -name VERILOG_FILE ean13_decoder.v
+# key2 history: threshold_binarize.v (plain B/W) -> barcode_decoder.v
+# (Code 39) -> ean13_decoder.v (current). Real testing showed retail
+# packaging is EAN-13/UPC-A, not Code 39, so barcode_decoder.v got the
+# same treatment threshold_binarize.v got before it: kept in the repo,
+# not part of this build. Uncomment + swap into camera_display_top.v's
+# key2 mux if Code 39 (asset tags etc) or plain B/W is ever wanted again.
+# set_global_assignment -name VERILOG_FILE barcode_decoder.v
+# set_global_assignment -name VERILOG_FILE threshold_binarize.v
+
+# Camera -> BNN -> LG3661BH pipeline: roi_binarize_28x28.v crops+downsamples
+# a fixed 224x224 center ROI of the live 480x272 frame into the 28x28
+# binary image bnn_core.v expects, one frame at a time; seg7_decoder.v
+# turns bnn_core.v's digit_out into a 7-segment pattern for the LG3661BH
+# (common anode, active-low -- confirmed by user). Both instantiated in
+# camera_display_top.v as an always-on background classifier, independent
+# of the key1/2/3 display-mode mux. See CLAUDE.md for the ROI math and the
+# 8x8-block-OR downsample rationale.
+set_global_assignment -name VERILOG_FILE roi_binarize_28x28.v
+set_global_assignment -name VERILOG_FILE seg7_decoder.v
+
+# camera_display_top.v's seg7[6:0]/seg7_dp ports (LG3661BH segments a-g +
+# decimal point) have NO location assignment yet -- physical wiring to the
+# display hasn\'t been confirmed (asked the user which FPGA pins the 8
+# wires go to; the answer received back, "LG2661BH", didn\'t actually give
+# pin numbers, so this is still open). Compiling as-is will still succeed
+# -- Quartus will auto-assign these 8 pins to whatever's free -- but won't
+# light up the real display correctly until the location assignments below
+# are filled in to match how it's actually wired. Uncomment and fill in
+# once known:
+# set_location_assignment PIN_xx -to seg7[0]   # a
+# set_location_assignment PIN_xx -to seg7[1]   # b
+# set_location_assignment PIN_xx -to seg7[2]   # c
+# set_location_assignment PIN_xx -to seg7[3]   # d
+# set_location_assignment PIN_xx -to seg7[4]   # e
+# set_location_assignment PIN_xx -to seg7[5]   # f
+# set_location_assignment PIN_xx -to seg7[6]   # g
+# set_location_assignment PIN_xx -to seg7_dp
+# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[0]
+# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[1]
+# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[2]
+# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[3]
+# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[4]
+# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[5]
+# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[6]
+# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7_dp
+
+
+
+
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to clk
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to rst_n
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to key1_n
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to key2_n
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to key3_n
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_clk
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_hs
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_vs
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_de
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[0]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[1]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[2]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[3]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[4]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[5]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[6]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[7]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[0]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[1]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[2]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[3]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[4]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[5]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[6]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to key_start
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_b[0]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_b[1]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_b[2]
@@ -269,17 +362,37 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_b[4]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_b[5]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_b[6]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_b[7]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_clk
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_cke
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_cs_n
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_we_n
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_cas_n
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_ras_n
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dqm[0]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dqm[1]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_ba[0]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_ba[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_clk
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_de
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[2]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[3]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[4]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[5]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[6]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_g[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_hs
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[2]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[3]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[4]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[5]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[6]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_r[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to lcd_vs
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[2]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[3]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to rst_n
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sccb_scl
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sccb_sda
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[10]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[11]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[12]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[1]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[2]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[3]
@@ -289,10 +402,19 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[6]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[7]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[8]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[9]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[10]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[11]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_addr[12]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_ba[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_ba[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_cas_n
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_cke
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_clk
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_cs_n
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[10]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[11]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[12]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[13]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[14]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[15]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[1]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[2]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[3]
@@ -302,30 +424,10 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[6]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[7]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[8]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[9]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[10]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[11]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[12]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[13]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[14]
-set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dq[15]
-
-set_global_assignment -name VERILOG_FILE lcd_pattern_top.v
-set_global_assignment -name VERILOG_FILE yuv422_to_rgb888.v
-
-
-set_global_assignment -name VERILOG_FILE seq_divider.v
-set_global_assignment -name VERILOG_FILE color_blob_tracker.v
-set_global_assignment -name VERILOG_FILE overlay_marker.v
-set_global_assignment -name VERILOG_FILE motion_detector.v
-set_global_assignment -name VERILOG_FILE motion_overlay.v
-
-set_global_assignment -name VERILOG_FILE button_debounce.v
-set_global_assignment -name VERILOG_FILE display_mode_select.v
-set_global_assignment -name VERILOG_FILE gaussian_blur3x3.v
-set_global_assignment -name VERILOG_FILE sobel_edge.v
-set_global_assignment -name VERILOG_FILE nms_thresh.v
-set_global_assignment -name VERILOG_FILE threshold_binarize.v
-
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dqm[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_dqm[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_ras_n
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_we_n
 set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id To
 set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id To
 set_global_assignment -name PARTITION_COLOR 16764057 -section_id To

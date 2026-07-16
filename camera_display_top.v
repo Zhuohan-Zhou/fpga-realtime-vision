@@ -48,7 +48,20 @@ module camera_display_top (
     // Mode-select buttons (active-low)
     input         key1_n,   // Sobel edge detection
     input         key2_n,   // threshold binarization
-    input         key3_n    // centroid tracking (default)
+    input         key3_n,   // centroid tracking (default)
+
+    // LG3661BH 7-segment digit display -- BNN handwritten-digit output.
+    // Common anode, active-low segment drive (user-confirmed): seg[6:0] =
+    // {a,b,c,d,e,f,g}, driven low to light a segment. This runs as an
+    // always-on background classifier independent of the key1/2/3 mode
+    // mux above -- it doesn't touch final_r/g/b or disp_mode at all, see
+    // the BNN camera pipeline block near the end of this file.
+    // NOT YET PIN-ASSIGNED in the qsf -- see the comment there. Physical
+    // wiring to the LG3661BH still needs to be confirmed before this does
+    // anything on real hardware; leaving the ports here now so the logic
+    // is in place and ready the moment pins are known.
+    output  [6:0] seg7,
+    output        seg7_dp
 );
 
 // PLL
@@ -204,44 +217,18 @@ yuv422_to_rgb888 u_conv (
     .y8    (disp_y)
 );
 
-// Motion detector (16x16-cell frame differencing)
-wire       motion_highlight_w, motion_detected_w;
-wire [8:0] motion_blocks_w;    // hook up to SignalTap for tuning
+// Motion detector removed from this path (per user request): it never fed
+// into the tracker anyway, just an independent yellow-tint overlay
+// composited alongside it. Module files (motion_detector.v/motion_overlay.v)
+// are kept in the repo and still buildable via their own instance
+// elsewhere if wanted later, just not instantiated here -- also frees up
+// whatever LAB/M9K they were using.
 
-motion_detector u_motion (
-    .clk             (clk_9m),
-    .rst_n           (sys_rst_n),
-    .de              (lcd_de_w),
-    .frame_pulse     (lcd_frame_pulse),
-    .y8              (disp_y),
-    .pixel_x         (pixel_x_w),
-    .pixel_y         (pixel_y_w),
-    .highlight       (motion_highlight_w),
-    .motion_detected (motion_detected_w),
-    .changed_blocks  (motion_blocks_w)
-);
-
-wire [7:0] mo_r, mo_g, mo_b;
-
-// Gate the per-cell highlight with the frame-level motion_detected flag
-// (>= MIN_BLOCKS cells changed together) so a single cell tripped by sensor
-// noise/AEC/flicker never lights up alone. Costs one frame of latency,
-// not noticeable at video rate.
-wire motion_highlight_gated = motion_highlight_w & motion_detected_w;
-
-motion_overlay u_motion_ov (
-    .highlight (motion_highlight_gated),
-    .in_r      (disp_r),
-    .in_g      (disp_g),
-    .in_b      (disp_b),
-    .out_r     (mo_r),
-    .out_g     (mo_g),
-    .out_b     (mo_b)
-);
-
-// Color-threshold blob tracker (centroid of matching pixels).
-// R_LO..B_HI defaults live in color_blob_tracker.v, tune for whatever
-// object color you're tracking.
+// Color-threshold blob tracker (centroid of matching pixels), now with
+// Kalman-filtered position/velocity + outlier rejection instead of plain
+// EMA smoothing -- see color_blob_tracker.v's header for why. R_LO..B_HI
+// defaults live in color_blob_tracker.v, tune for whatever object color
+// you're tracking.
 wire        blob_found_w, blob_cx_valid_w;
 wire [10:0] blob_cx_w, blob_cy_w;
 wire [17:0] blob_pixels_w;   // hook up to SignalTap to tune thresholds
@@ -263,16 +250,17 @@ color_blob_tracker u_blob (
     .blob_pixels (blob_pixels_w)
 );
 
-// Crosshair overlay at the tracked centroid
+// Crosshair overlay at the tracked centroid, straight over the live image
+// now (used to go through motion_overlay's tint first).
 overlay_marker u_overlay (
     .pixel_x    (pixel_x_w),
     .pixel_y    (pixel_y_w),
     .cx         (blob_cx_w),
     .cy         (blob_cy_w),
     .blob_found (blob_found_w),
-    .in_r       (mo_r),
-    .in_g       (mo_g),
-    .in_b       (mo_b),
+    .in_r       (disp_r),
+    .in_g       (disp_g),
+    .in_b       (disp_b),
     .out_r      (ov_r),
     .out_g      (ov_g),
     .out_b      (ov_b)
@@ -363,25 +351,154 @@ nms_thresh u_nms (
     .edge_b    (sobel_b)
 );
 
-wire [7:0] bin_r, bin_g, bin_b;
+// key2 was plain black/white threshold_binarize.v, then briefly a Code 39
+// reader (barcode_decoder.v) -- swapped again to EAN-13/UPC-A
+// (ean13_decoder.v) once real testing showed retail packaging (the
+// drink-box case this was built for) is printed in EAN-13/UPC-A, not
+// Code 39. barcode_decoder.v itself is untouched and still in the repo
+// (not instantiated, same treatment as threshold_binarize.v and
+// motion_detector.v/motion_overlay.v below -- qsf lines commented, not
+// deleted) in case Code 39 (asset tags etc) is ever wanted again.
+localparam [10:0] BARCODE_SCAN_ROW = 11'd136;
 
-threshold_binarize u_binarize (
-    .y8    (disp_y),
-    .bin_r (bin_r),
-    .bin_g (bin_g),
-    .bin_b (bin_b)
+wire        bc_valid_w;
+wire [51:0] bc_digits_w;
+wire        bc_scan_active_w;
+
+ean13_decoder #(
+    .SCAN_ROW (BARCODE_SCAN_ROW)
+) u_barcode (
+    .clk            (clk_9m),
+    .rst_n          (sys_rst_n),
+    .de             (lcd_de_w),
+    .frame_pulse    (lcd_frame_pulse),
+    .y8             (disp_y),
+    .pixel_x        (pixel_x_w),
+    .pixel_y        (pixel_y_w),
+    .ean_valid      (bc_valid_w),
+    .decoded_digits (bc_digits_w),        // 13 BCD nibbles -- not displayed
+    .scan_active    (bc_scan_active_w)    // yet, see CLAUDE.md
 );
+
+// Sticky "recently decoded" flag so a valid read is visible for longer than
+// ean_valid's single-cycle pulse -- counts down once per LCD frame.
+reg [7:0] bc_hold_cnt;
+always @(posedge clk_9m or negedge sys_rst_n) begin
+    if (!sys_rst_n) begin
+        bc_hold_cnt <= 8'd0;
+    end
+    else if (bc_valid_w) begin
+        bc_hold_cnt <= 8'd90;   // purely visual hold, not timing-critical
+    end
+    else if (lcd_frame_pulse && (bc_hold_cnt != 8'd0)) begin
+        bc_hold_cnt <= bc_hold_cnt - 8'd1;
+    end
+end
+
+// Live image passthrough with a reference line drawn across the scan row:
+// yellow while hunting, green for a short hold right after a valid decode.
+wire       bc_hold_active = (bc_hold_cnt != 8'd0);
+wire [7:0] bc_r = bc_scan_active_w ? (bc_hold_active ? 8'd0 : 8'd255) : disp_r;
+wire [7:0] bc_g = bc_scan_active_w ? 8'd255                          : disp_g;
+wire [7:0] bc_b = bc_scan_active_w ? 8'd0                            : disp_b;
 
 localparam [1:0] MODE_TRACKING = 2'd0,
                   MODE_SOBEL    = 2'd1,
-                  MODE_BINARIZE = 2'd2;
+                  MODE_BINARIZE = 2'd2;   // now the barcode-scan view
 
 assign final_r = (disp_mode == MODE_SOBEL)    ? sobel_r :
-                  (disp_mode == MODE_BINARIZE) ? bin_r   : ov_r;
+                  (disp_mode == MODE_BINARIZE) ? bc_r    : ov_r;
 assign final_g = (disp_mode == MODE_SOBEL)    ? sobel_g :
-                  (disp_mode == MODE_BINARIZE) ? bin_g   : ov_g;
+                  (disp_mode == MODE_BINARIZE) ? bc_g    : ov_g;
 assign final_b = (disp_mode == MODE_SOBEL)    ? sobel_b :
-                  (disp_mode == MODE_BINARIZE) ? bin_b   : ov_b;
+                  (disp_mode == MODE_BINARIZE) ? bc_b    : ov_b;
+
+// ---- BNN camera pipeline: live digit -> LG3661BH, always-on background
+// classifier, decoupled from the key1/2/3 display-mode mux above (all
+// three buttons are already spoken for by Sobel/EAN-13/tracking) ----
+//
+// roi_binarize_28x28.v taps the same pixel_x_w/pixel_y_w/disp_y/lcd_de_w/
+// lcd_frame_pulse bus every other pixel-level module here already uses,
+// crops+downsamples the fixed 224x224 center of the frame (user chose the
+// fixed-ROI approach over auto-locating the digit) into a 28x28 binary
+// image once per camera frame.
+wire         bnn_img_valid;
+wire [783:0] bnn_img;
+
+roi_binarize_28x28 u_roi (
+    .clk         (clk_9m),
+    .rst_n       (sys_rst_n),
+    .de          (lcd_de_w),
+    .frame_pulse (lcd_frame_pulse),
+    .y8          (disp_y),
+    .pixel_x     (pixel_x_w),
+    .pixel_y     (pixel_y_w),
+    .img_valid   (bnn_img_valid),
+    .img_out     (bnn_img)
+);
+
+// Small FSM: kick off one bnn_core classification each time roi_binarize
+// finishes a fresh frame, wait for it to finish (~1040 cycles at clk_9m,
+// well within a single frame period), latch the result, go back to
+// waiting for the next img_valid. bnn_img is only sampled the one cycle
+// bnn_core latches image_in right after start -- by then there's a full
+// vertical-blanking-plus-24-lines margin before roi_binarize's img_mem
+// starts getting overwritten by the next frame, so no torn-frame risk.
+localparam [1:0] BNN_IDLE = 2'd0, BNN_START = 2'd1, BNN_WAIT = 2'd2;
+reg [1:0] bnn_fsm;
+reg       bnn_start;
+reg       bnn_result_valid;
+reg [3:0] bnn_digit;
+wire      bnn_done;
+wire [3:0] bnn_digit_out;
+
+always @(posedge clk_9m or negedge sys_rst_n) begin
+    if (!sys_rst_n) begin
+        bnn_fsm          <= BNN_IDLE;
+        bnn_start        <= 1'b0;
+        bnn_digit        <= 4'd0;
+        bnn_result_valid <= 1'b0;
+    end
+    else begin
+        bnn_start <= 1'b0;
+        case (bnn_fsm)
+            BNN_IDLE: begin
+                if (bnn_img_valid)
+                    bnn_fsm <= BNN_START;
+            end
+            BNN_START: begin
+                bnn_start <= 1'b1;
+                bnn_fsm   <= BNN_WAIT;
+            end
+            BNN_WAIT: begin
+                if (bnn_done) begin
+                    bnn_digit        <= bnn_digit_out;
+                    bnn_result_valid <= 1'b1;
+                    bnn_fsm          <= BNN_IDLE;
+                end
+            end
+            default: bnn_fsm <= BNN_IDLE;
+        endcase
+    end
+end
+
+bnn_core u_bnn_cam (
+    .clk       (clk_9m),
+    .rst_n     (sys_rst_n),
+    .start     (bnn_start),
+    .image_in  (bnn_img),
+    .done      (bnn_done),
+    .digit_out (bnn_digit_out)
+);
+
+// digit_valid gates the display blank until the first real classification
+// has completed -- avoids showing a stray "0" before there's a real result.
+seg7_decoder #(.ACTIVE_LOW(1)) u_seg7 (
+    .digit       (bnn_digit),
+    .digit_valid (bnn_result_valid),
+    .seg         (seg7),
+    .dp          (seg7_dp)
+);
 
 // LEDs
 reg cam_frame_led;
