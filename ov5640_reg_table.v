@@ -33,8 +33,22 @@ always @(*) begin
         9'd15:  data = {16'h3002, 8'h1c};
         9'd16:  data = {16'h3006, 8'hc3};
         // FREX / strobe
-        9'd17:  data = {16'h3821, 8'h01};  // horizontal flip off
-        9'd18:  data = {16'h3820, 8'h41};  // vertical flip off
+        // Horizontal mirror ON (0x3821 bit1+bit2 set, 0x07 vs 0x01) -- user
+        // reported the live image looks mirrored; the sensor's raw readout
+        // apparently comes out mirrored relative to the true scene (this is
+        // common depending on how the module is physically mounted), so we
+        // flip it back at the sensor via this register rather than leaving
+        // it uncorrected. This affects BOTH the LCD preview and the BNN
+        // classifier equally (they read the exact same pixel stream), which
+        // matters because handwritten digits are not left-right symmetric --
+        // an uncorrected mirror would feed bnn_core images it was never
+        // trained on. NOT YET VISUALLY CONFIRMED on real hardware -- after
+        // recompiling, check that text/handwriting held up to the camera
+        // reads normally (not backwards) on the LCD; if it's backwards the
+        // OTHER way now, revert this byte back to 0x01 (also update the
+        // duplicate entry near the end of this table, see below).
+        9'd17:  data = {16'h3821, 8'h07};  // horizontal mirror ON
+        9'd18:  data = {16'h3820, 8'h41};  // vertical flip off (unchanged)
         // Timing and resolution: 480x272
         9'd19:  data = {16'h3800, 8'h00};  // x start H
         9'd20:  data = {16'h3801, 8'h00};  // x start L
@@ -259,8 +273,11 @@ always @(*) begin
         9'd223: data = {16'h4741, 8'h00};
         // DVP PCLK divider
         9'd224: data = {16'h3824, 8'h02};
-        // Mirror / flip off
-        9'd225: data = {16'h3821, 8'h01};
+        // Mirror ON / flip off -- this is the FINAL write to these two
+        // registers (applied after the output-window setup above, and
+        // right before power-on below), so this is the value that actually
+        // sticks; keep in sync with the 0x3821 change near entry 17 above.
+        9'd225: data = {16'h3821, 8'h07};
         9'd226: data = {16'h3820, 8'h41};
         // Power on
         9'd227: data = {16'h3008, 8'h02};  // wake up from power down

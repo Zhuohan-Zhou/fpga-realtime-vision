@@ -309,10 +309,10 @@ set_global_assignment -name VERILOG_FILE ean13_decoder.v
 # set_global_assignment -name VERILOG_FILE barcode_decoder.v
 # set_global_assignment -name VERILOG_FILE threshold_binarize.v
 
-# Camera -> BNN -> LG3661BH pipeline: roi_binarize_28x28.v crops+downsamples
-# a fixed 224x224 center ROI of the live 480x272 frame into the 28x28
-# binary image bnn_core.v expects, one frame at a time; seg7_decoder.v
-# turns bnn_core.v's digit_out into a 7-segment pattern for the LG3661BH
+# Camera -> BNN -> on-board 7-segment display pipeline: roi_binarize_28x28.v
+# crops+downsamples a fixed 224x224 center ROI of the live 480x272 frame
+# into the 28x28 binary image bnn_core.v expects, one frame at a time;
+# seg7_decoder.v turns bnn_core.v's digit_out into a 7-segment pattern
 # (common anode, active-low -- confirmed by user). Both instantiated in
 # camera_display_top.v as an always-on background classifier, independent
 # of the key1/2/3 display-mode mux. See CLAUDE.md for the ROI math and the
@@ -320,31 +320,42 @@ set_global_assignment -name VERILOG_FILE ean13_decoder.v
 set_global_assignment -name VERILOG_FILE roi_binarize_28x28.v
 set_global_assignment -name VERILOG_FILE seg7_decoder.v
 
-# camera_display_top.v's seg7[6:0]/seg7_dp ports (LG3661BH segments a-g +
-# decimal point) have NO location assignment yet -- physical wiring to the
-# display hasn\'t been confirmed (asked the user which FPGA pins the 8
-# wires go to; the answer received back, "LG2661BH", didn\'t actually give
-# pin numbers, so this is still open). Compiling as-is will still succeed
-# -- Quartus will auto-assign these 8 pins to whatever's free -- but won't
-# light up the real display correctly until the location assignments below
-# are filled in to match how it's actually wired. Uncomment and fill in
-# once known:
-# set_location_assignment PIN_xx -to seg7[0]   # a
-# set_location_assignment PIN_xx -to seg7[1]   # b
-# set_location_assignment PIN_xx -to seg7[2]   # c
-# set_location_assignment PIN_xx -to seg7[3]   # d
-# set_location_assignment PIN_xx -to seg7[4]   # e
-# set_location_assignment PIN_xx -to seg7[5]   # f
-# set_location_assignment PIN_xx -to seg7[6]   # g
-# set_location_assignment PIN_xx -to seg7_dp
-# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[0]
-# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[1]
-# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[2]
-# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[3]
-# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[4]
-# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[5]
-# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7[6]
-# set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to seg7_dp
+# AX4010 on-board 6-digit 7-segment display, pin table from the AX4010
+# manual p.31 "Digital tube pin assignment" (user provided the table
+# directly). DIG[7:0] = {dp,g,f,e,d,c,b,a}, shared segment lines across
+# all 6 digit positions. SEL[5:0] = per-digit enable, one per position.
+# camera_display_top.v only drives digit 0 (SEL[0], rightmost) since we
+# only need to show one classifier result -- no multiplexed scanning.
+# SEL polarity (active-low) is ASSUMED to match DIG's common-anode
+# convention -- not yet confirmed on real hardware, see CLAUDE.md.
+set_location_assignment PIN_R14 -to dig[0]
+set_location_assignment PIN_N16 -to dig[1]
+set_location_assignment PIN_P16 -to dig[2]
+set_location_assignment PIN_T15 -to dig[3]
+set_location_assignment PIN_P15 -to dig[4]
+set_location_assignment PIN_N12 -to dig[5]
+set_location_assignment PIN_N15 -to dig[6]
+set_location_assignment PIN_R16 -to dig[7]
+set_location_assignment PIN_N9 -to sel[0]
+set_location_assignment PIN_P9 -to sel[1]
+set_location_assignment PIN_M10 -to sel[2]
+set_location_assignment PIN_N11 -to sel[3]
+set_location_assignment PIN_P11 -to sel[4]
+set_location_assignment PIN_M11 -to sel[5]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to dig[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to dig[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to dig[2]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to dig[3]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to dig[4]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to dig[5]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to dig[6]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to dig[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sel[0]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sel[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sel[2]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sel[3]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sel[4]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sel[5]
 
 
 

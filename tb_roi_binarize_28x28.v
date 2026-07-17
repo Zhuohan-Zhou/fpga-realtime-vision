@@ -22,6 +22,7 @@ reg [10:0] pixel_x, pixel_y;
 
 wire img_valid;
 wire [783:0] img_out;
+wire [15:0] ink_count;
 
 roi_binarize_28x28 #(
     .ROI_X0 (ROI_X0),
@@ -36,7 +37,8 @@ roi_binarize_28x28 #(
     .pixel_x     (pixel_x),
     .pixel_y     (pixel_y),
     .img_valid   (img_valid),
-    .img_out     (img_out)
+    .img_out     (img_out),
+    .ink_count   (ink_count)
 );
 
 always #10 clk = ~clk;
@@ -117,6 +119,14 @@ initial begin
     else
         $display("Test1: no unexpected bits set elsewhere");
 
+    // dark 8x8 block = 64 raw dark pixels -> ink_count should read exactly 64
+    if (ink_count !== 16'd64) begin
+        $display("FAIL Test1: expected ink_count=64, got %0d", ink_count);
+        errors = errors + 1;
+    end
+    else
+        $display("Test1: ink_count correctly reads 64 (8x8 dark block)");
+
     // ---- Test 2: fully bright frame -> all zero, no leftover bits ----
     send_frame(0);
     wait (img_valid == 1'b1);
@@ -128,6 +138,13 @@ initial begin
     end
     else
         $display("Test2: all-bright frame correctly produced all-zero image");
+
+    if (ink_count !== 16'd0) begin
+        $display("FAIL Test2: expected ink_count=0 for blank frame, got %0d", ink_count);
+        errors = errors + 1;
+    end
+    else
+        $display("Test2: ink_count correctly reads 0 (no dark pixels, no stale carryover)");
 
     if (errors == 0)
         $display("ALL TESTS PASSED");

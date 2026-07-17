@@ -59,10 +59,10 @@ always @(*) begin
     case (state)
         IDLE:   next_state = start ? START : IDLE;
         START:  next_state = (scl_tick && phase == 3'd3) ? ADDR   : START;
-		  ADDR:  next_state = (scl_tick && phase==3'd3 && bit_cnt==4'd8) ? REG_H : ADDR;
-		  REG_H: next_state = (scl_tick && phase==3'd3 && bit_cnt==4'd8) ? REG_L : REG_H;
-		  REG_L: next_state = (scl_tick && phase==3'd3 && bit_cnt==4'd8) ? DATA  : REG_L;
-		  DATA:  next_state = (scl_tick && phase==3'd3 && bit_cnt==4'd8) ? STOP  : DATA;
+        ADDR:   next_state = (scl_tick && phase==3'd3 && bit_cnt==4'd8) ? REG_H : ADDR;
+        REG_H:  next_state = (scl_tick && phase==3'd3 && bit_cnt==4'd8) ? REG_L : REG_H;
+        REG_L:  next_state = (scl_tick && phase==3'd3 && bit_cnt==4'd8) ? DATA  : REG_L;
+        DATA:   next_state = (scl_tick && phase==3'd3 && bit_cnt==4'd8) ? STOP  : DATA;
         STOP:   next_state = (scl_tick && phase == 3'd3) ? FINISH : STOP;
         FINISH: next_state = IDLE;
         default: next_state = IDLE;

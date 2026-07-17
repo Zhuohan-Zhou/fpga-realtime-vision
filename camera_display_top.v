@@ -50,18 +50,23 @@ module camera_display_top (
     input         key2_n,   // threshold binarization
     input         key3_n,   // centroid tracking (default)
 
-    // LG3661BH 7-segment digit display -- BNN handwritten-digit output.
-    // Common anode, active-low segment drive (user-confirmed): seg[6:0] =
-    // {a,b,c,d,e,f,g}, driven low to light a segment. This runs as an
+    // On-board AX4010 6-digit 7-segment display -- BNN handwritten-digit
+    // output. Per the AX4010 manual's "Digital tube pin assignment" table
+    // (p.31): DIG[7:0] = {dp,g,f,e,d,c,b,a} are the shared segment lines
+    // (common anode, active-low -- same polarity already confirmed for
+    // this display), and SEL[5:0] are per-digit enable lines, one per
+    // physical digit position, driven through switching transistors.
+    // We only need to show one digit (the classifier result), so no
+    // multiplexed scanning is needed -- SEL[0] (rightmost digit) is held
+    // permanently selected and DIG is driven statically; SEL[1:5] are
+    // held de-selected so the other 5 digits stay dark. This runs as an
     // always-on background classifier independent of the key1/2/3 mode
     // mux above -- it doesn't touch final_r/g/b or disp_mode at all, see
     // the BNN camera pipeline block near the end of this file.
-    // NOT YET PIN-ASSIGNED in the qsf -- see the comment there. Physical
-    // wiring to the LG3661BH still needs to be confirmed before this does
-    // anything on real hardware; leaving the ports here now so the logic
-    // is in place and ready the moment pins are known.
-    output  [6:0] seg7,
-    output        seg7_dp
+    output  [7:0] dig,   // {dp,g,f,e,d,c,b,a}, active-low
+    output  [5:0] sel    // per-digit enable; polarity assumed active-low
+                          // (matches DIG's common-anode convention) --
+                          // NOT YET VERIFIED on real hardware, see CLAUDE.md
 );
 
 // PLL
@@ -141,9 +146,9 @@ wire [7:0]  final_r, final_g, final_b;
 lcd_driver u_lcd (
     .pclk    (clk_9m),
     .rst_n   (sys_rst_n),
-    .data_r  (final_r),
-    .data_g  (final_g),
-    .data_b  (final_b),
+    .data_r  (disp_final_r),
+    .data_g  (disp_final_g),
+    .data_b  (disp_final_b),
     .lcd_clk (lcd_clk),
     .lcd_hs  (lcd_hs),
     .lcd_vs  (lcd_vs_w),
@@ -413,6 +418,31 @@ assign final_g = (disp_mode == MODE_SOBEL)    ? sobel_g :
 assign final_b = (disp_mode == MODE_SOBEL)    ? sobel_b :
                   (disp_mode == MODE_BINARIZE) ? bc_b    : ov_b;
 
+// Green reference box around the fixed BNN capture ROI (224x224, centered --
+// same X0/Y0 as roi_binarize_28x28.v's defaults below) drawn on top of
+// whatever's already on screen, regardless of which key1/2/3 mode is
+// selected -- so there's always a visible target for where to hold a
+// handwritten digit. 2px outline, hollow (not filled) so it doesn't cover
+// the ROI's own content.
+localparam [10:0] ROI_BOX_X0    = 11'd128;
+localparam [10:0] ROI_BOX_Y0    = 11'd24;
+localparam [10:0] ROI_BOX_X1    = ROI_BOX_X0 + 11'd224 - 11'd1;   // 351
+localparam [10:0] ROI_BOX_Y1    = ROI_BOX_Y0 + 11'd224 - 11'd1;   // 247
+localparam [10:0] ROI_BOX_LINE_W = 11'd2;
+
+wire roi_box_in_x    = (pixel_x_w >= ROI_BOX_X0) && (pixel_x_w <= ROI_BOX_X1);
+wire roi_box_in_y    = (pixel_y_w >= ROI_BOX_Y0) && (pixel_y_w <= ROI_BOX_Y1);
+wire roi_box_on_top  = (pixel_y_w >= ROI_BOX_Y0) && (pixel_y_w < ROI_BOX_Y0 + ROI_BOX_LINE_W);
+wire roi_box_on_bot  = (pixel_y_w <= ROI_BOX_Y1) && (pixel_y_w > ROI_BOX_Y1 - ROI_BOX_LINE_W);
+wire roi_box_on_left = (pixel_x_w >= ROI_BOX_X0) && (pixel_x_w < ROI_BOX_X0 + ROI_BOX_LINE_W);
+wire roi_box_on_rt   = (pixel_x_w <= ROI_BOX_X1) && (pixel_x_w > ROI_BOX_X1 - ROI_BOX_LINE_W);
+wire roi_box_pixel   = (roi_box_in_x && (roi_box_on_top || roi_box_on_bot)) ||
+                        (roi_box_in_y && (roi_box_on_left || roi_box_on_rt));
+
+wire [7:0] disp_final_r = roi_box_pixel ? 8'd0   : final_r;
+wire [7:0] disp_final_g = roi_box_pixel ? 8'd255 : final_g;
+wire [7:0] disp_final_b = roi_box_pixel ? 8'd0   : final_b;
+
 // ---- BNN camera pipeline: live digit -> LG3661BH, always-on background
 // classifier, decoupled from the key1/2/3 display-mode mux above (all
 // three buttons are already spoken for by Sobel/EAN-13/tracking) ----
@@ -424,6 +454,7 @@ assign final_b = (disp_mode == MODE_SOBEL)    ? sobel_b :
 // image once per camera frame.
 wire         bnn_img_valid;
 wire [783:0] bnn_img;
+wire [15:0]  bnn_ink_count;
 
 roi_binarize_28x28 u_roi (
     .clk         (clk_9m),
@@ -434,7 +465,8 @@ roi_binarize_28x28 u_roi (
     .pixel_x     (pixel_x_w),
     .pixel_y     (pixel_y_w),
     .img_valid   (bnn_img_valid),
-    .img_out     (bnn_img)
+    .img_out     (bnn_img),
+    .ink_count   (bnn_ink_count)
 );
 
 // Small FSM: kick off one bnn_core classification each time roi_binarize
@@ -444,10 +476,24 @@ roi_binarize_28x28 u_roi (
 // bnn_core latches image_in right after start -- by then there's a full
 // vertical-blanking-plus-24-lines margin before roi_binarize's img_mem
 // starts getting overwritten by the next frame, so no torn-frame risk.
-localparam [1:0] BNN_IDLE = 2'd0, BNN_START = 2'd1, BNN_WAIT = 2'd2;
+//
+// bnn_core has no "reject/unknown" class -- it always argmaxes to some
+// digit 0-9, even fed a nearly-blank ROI (empty paper/background), so the
+// display would otherwise show a stale or nonsense digit at all times.
+// MIN_INK_PIXELS gates that: bnn_ink_count (raw dark-pixel count within
+// the 224x224 ROI, from roi_binarize_28x28.v) is sampled at BNN_START and
+// carried through the classification latency; if it was below threshold,
+// the result is discarded (bnn_result_valid stays 0, display blanks)
+// instead of being shown. 150px out of 50176 is a rough, untested
+// first-cut ("is there any ink here at all") -- not a real digit/no-digit
+// classifier, just a presence gate; likely needs real-world tuning like
+// THRESH/ROI size already flagged in CLAUDE.md.
+localparam [1:0]  BNN_IDLE = 2'd0, BNN_START = 2'd1, BNN_WAIT = 2'd2;
+localparam [15:0] MIN_INK_PIXELS = 16'd150;
 reg [1:0] bnn_fsm;
 reg       bnn_start;
 reg       bnn_result_valid;
+reg       bnn_ink_ok;
 reg [3:0] bnn_digit;
 wire      bnn_done;
 wire [3:0] bnn_digit_out;
@@ -458,13 +504,16 @@ always @(posedge clk_9m or negedge sys_rst_n) begin
         bnn_start        <= 1'b0;
         bnn_digit        <= 4'd0;
         bnn_result_valid <= 1'b0;
+        bnn_ink_ok       <= 1'b0;
     end
     else begin
         bnn_start <= 1'b0;
         case (bnn_fsm)
             BNN_IDLE: begin
-                if (bnn_img_valid)
-                    bnn_fsm <= BNN_START;
+                if (bnn_img_valid) begin
+                    bnn_ink_ok <= (bnn_ink_count >= MIN_INK_PIXELS);
+                    bnn_fsm    <= BNN_START;
+                end
             end
             BNN_START: begin
                 bnn_start <= 1'b1;
@@ -473,7 +522,7 @@ always @(posedge clk_9m or negedge sys_rst_n) begin
             BNN_WAIT: begin
                 if (bnn_done) begin
                     bnn_digit        <= bnn_digit_out;
-                    bnn_result_valid <= 1'b1;
+                    bnn_result_valid <= bnn_ink_ok;   // blank if there was nothing to classify
                     bnn_fsm          <= BNN_IDLE;
                 end
             end
@@ -493,12 +542,45 @@ bnn_core u_bnn_cam (
 
 // digit_valid gates the display blank until the first real classification
 // has completed -- avoids showing a stray "0" before there's a real result.
+wire [6:0] seg7_pattern;
+wire       seg7_dp_pattern;
+
 seg7_decoder #(.ACTIVE_LOW(1)) u_seg7 (
     .digit       (bnn_digit),
     .digit_valid (bnn_result_valid),
-    .seg         (seg7),
-    .dp          (seg7_dp)
+    .seg         (seg7_pattern),
+    .dp          (seg7_dp_pattern)
 );
+
+// AX4010 on-board 6-digit display: DIG[7:0] = {dp,g,f,e,d,c,b,a} shared
+// across all 6 digit positions, SEL[5:0] picks which position is
+// currently powered. We only need one digit lit (the classifier result),
+// so no scanning/multiplexing -- SEL[0] (rightmost) held selected, the
+// other 5 held de-selected so they stay dark regardless of DIG.
+//
+// BUG FIXED 2026-07-17: this used to be a blind concatenation
+// `assign dig = {seg7_dp_pattern, seg7_pattern};`. seg7_pattern[6:0] is
+// {a,b,c,d,e,f,g} (seg7_pattern[6]=a .. seg7_pattern[0]=g, per
+// seg7_decoder.v's own convention), so that concatenation produced
+// dig[6]=a, dig[5]=b, dig[4]=c, dig[3]=d, dig[2]=e, dig[1]=f, dig[0]=g --
+// i.e. dp landed correctly at dig[7], but the a..g order was reversed
+// against the manual's DIG[0]=a .. DIG[6]=g mapping. Root cause of user's
+// report "single digit position lights up correctly, but the segment
+// shape isn't any real digit" -- each segment was driving the wrong
+// physical DIG pin. Fixed with explicit per-bit wiring below instead of
+// a concatenation, so this can't silently reverse again.
+assign dig[0] = seg7_pattern[6];   // a
+assign dig[1] = seg7_pattern[5];   // b
+assign dig[2] = seg7_pattern[4];   // c
+assign dig[3] = seg7_pattern[3];   // d
+assign dig[4] = seg7_pattern[2];   // e
+assign dig[5] = seg7_pattern[1];   // f
+assign dig[6] = seg7_pattern[0];   // g
+assign dig[7] = seg7_dp_pattern;   // dp
+
+localparam SEL_ACTIVE_LOW = 1;   // matches DIG's common-anode polarity;
+                                  // not yet verified on real hardware
+assign sel = SEL_ACTIVE_LOW ? 6'b111110 : 6'b000001;   // only bit0 (digit 0) selected
 
 // LEDs
 reg cam_frame_led;

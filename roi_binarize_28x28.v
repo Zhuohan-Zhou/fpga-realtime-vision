@@ -56,8 +56,17 @@ module roi_binarize_28x28 #(
     input      [10:0] pixel_y,      // pixel_y_w
 
     output reg         img_valid,   // 1-cycle pulse: img_out is a fresh, complete frame
-    output     [783:0] img_out      // bit[y*28+x] = pixel(y,x), 1=stroke, 0=bg -- same
+    output     [783:0] img_out,     // bit[y*28+x] = pixel(y,x), 1=stroke, 0=bg -- same
                                      // convention bnn_core.v's image_in expects
+    output reg [15:0]  ink_count    // raw dark-pixel count within the ROI this frame
+                                     // (0-50176 for a 224x224 ROI); valid at the same
+                                     // time img_valid pulses. Lets a consumer tell
+                                     // "blank paper/background" apart from "there's
+                                     // actually something written here" -- bnn_core
+                                     // has no reject/unknown class, it always argmaxes
+                                     // to some digit 0-9 even when fed a near-empty
+                                     // frame, so this is needed to suppress the display
+                                     // when there's nothing worth classifying.
 );
 
 wire in_roi_x = (pixel_x >= ROI_X0) && (pixel_x < ROI_X0 + 11'd224);
@@ -73,6 +82,7 @@ reg [27:0] img_mem [0:27];
 reg [27:0] accum_row;
 reg [4:0]  by_reg;
 reg        row_active;
+reg [15:0] ink_run;   // running dark-pixel count for the frame currently being built
 
 // Combinational "what accum_row becomes" helpers, same next-value idiom
 // used in bnn_core.v's c1_acc_next/etc to avoid same-cycle stale reads.
@@ -95,6 +105,8 @@ always @(posedge clk or negedge rst_n) begin
         by_reg     <= 5'd0;
         row_active <= 1'b0;
         img_valid  <= 1'b0;
+        ink_run    <= 16'd0;
+        ink_count  <= 16'd0;
         for (k = 0; k < 28; k = k + 1)
             img_mem[k] <= 28'd0;
     end
@@ -103,10 +115,12 @@ always @(posedge clk or negedge rst_n) begin
 
         if (hit) begin
             if (!row_active) begin
-                // first ROI pixel of this frame
+                // first ROI pixel of this frame -- also (re)starts the
+                // running ink count for this frame
                 by_reg     <= by;
                 row_active <= 1'b1;
                 accum_row  <= new_row_seed;
+                ink_run    <= dark ? 16'd1 : 16'd0;
             end
             else if (by != by_reg) begin
                 // crossed into a new block-row: flush the row that just
@@ -115,9 +129,11 @@ always @(posedge clk or negedge rst_n) begin
                 img_mem[by_reg] <= accum_row;
                 by_reg          <= by;
                 accum_row       <= new_row_seed;
+                ink_run         <= ink_run + (dark ? 16'd1 : 16'd0);
             end
             else begin
                 accum_row <= cont_row_next;
+                ink_run   <= ink_run + (dark ? 16'd1 : 16'd0);
             end
         end
 
@@ -126,6 +142,7 @@ always @(posedge clk or negedge rst_n) begin
                 img_mem[by_reg] <= accum_row;   // flush the last row
             row_active <= 1'b0;
             img_valid  <= 1'b1;
+            ink_count  <= ink_run;   // latch this frame's ink count, holds until the next
         end
     end
 end
