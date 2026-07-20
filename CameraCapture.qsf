@@ -109,56 +109,9 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[1] -entity sccb_
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[2] -entity sccb_top_test
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[3] -entity sccb_top_test
 set_global_assignment -name VERILOG_FILE rtl/top/cam_init_top.v
-# Switched back to camera_display_top for the camera->BNN->7-segment
-# integration work (roi_binarize_28x28.v/seg7_decoder.v below). Leftover
-# from the bnn_demo_top real-hardware validation run further down this
-# file -- that demo is done and confirmed working, see CLAUDE.md.
+
+# TOP_LEVEL_ENTITY: camera_display_top for the camera->BNN->7-segment
 set_global_assignment -name TOP_LEVEL_ENTITY camera_display_top
-
-# bnn_core.v (binarized CNN). It is instantiated by camera_display_top.v
-# for the live camera -> ROI -> BNN -> 7-segment pipeline, and remains in
-# the file list so it can also be synthesized on its own for a resource
-# usage check:
-#   1. Temporarily change the TOP_LEVEL_ENTITY line above to bnn_core
-#   2. Processing > Start > Start Analysis & Synthesis ONLY -- do NOT run a
-#      full Compile. bnn_core's image_in port is 784 bits wide (28x28 test
-#      image, meant to be driven by a testbench, not real pins); the Fitter
-#      stage will fail trying to assign 784+ pins to a device that doesn't
-#      have anywhere near that many I/O. Analysis & Synthesis alone doesn't
-#      need pin assignment to succeed and will still produce the Resource
-#      Usage Summary (LEs/registers/memory bits) -- same report already
-#      used earlier this project to diagnose the LAB overflow.
-#   3. Change TOP_LEVEL_ENTITY back to camera_display_top afterward. (Done
-#      here -- confirmed real Analysis & Synthesis results after the
-#      row-memory rewrite: 2,860 LE / ~28% of the 10,320 LE budget, down
-#      from the first version's 5,776 LE. See CLAUDE.md.)
-set_global_assignment -name VERILOG_FILE rtl/vision/bnn/bnn_core.v
-
-# bnn_demo_top.v (real-hardware validation demo for bnn_core.v, its own
-# standalone top-level, separate from both camera_display_top and the
-# bnn_core-as-TOP_LEVEL_ENTITY resource check above). Unlike bnn_core.v
-# alone, this one has a normal small pin list (clk/rst_n/key1_n/led[3:0] --
-# 7 pins total) so it CAN go through a full Compile and actually be
-# programmed onto the board:
-#   1. Temporarily change the TOP_LEVEL_ENTITY line above to bnn_demo_top
-#   2. Processing > Start > Start Compilation (full compile this time --
-#      Fitter will succeed, this module's port list is tiny)
-#   3. Program the board. It auto-classifies test image 0 on power-up (LEDs
-#      should show 0111 = 7 within well under a second, no button needed),
-#      then KEY1 (the same physical button as key1_n/PIN_M15) advances
-#      through 6 more real MNIST test images, wrapping back to image 0
-#      after the last one. Expected LED sequence (binary, LED3..LED0 =
-#      digit_out[3:0]): 7, 1, 0, 4, 9, 3, 6, back to 7 -- that "6" on the
-#      7th image is not a bug, it's the same deliberate misclassification
-#      (true label 2) that tb_bnn_core.v already exercises; seeing the
-#      board reproduce that exact wrong answer (not some other value) is
-#      actually the strongest confirmation that real silicon matches
-#      simulation bit-for-bit, not just on the easy cases.
-#   4. Change TOP_LEVEL_ENTITY back to camera_display_top afterward.
-# clk/rst_n/key1_n/led all reuse the SAME global (non -entity-scoped) pin
-# assignments already below (PIN_E1/PIN_N13/PIN_M15/PIN_E10,F9,C9,D9) --
-# no new location/IO_STANDARD assignments needed for this module.
-set_global_assignment -name VERILOG_FILE rtl/top/bnn_demo_top.v
 
 set_location_assignment PIN_E1 -to clk
 set_location_assignment PIN_N13 -to rst_n
@@ -183,7 +136,7 @@ set_location_assignment PIN_F9 -to led[1]
 set_location_assignment PIN_C9 -to led[2]
 set_location_assignment PIN_D9 -to led[3]
 
-# Mode-select buttons, from AX4010 user manual Part 13 (User Keys):
+# Mode-select buttons KEY1 for sobel edge detection, Key2 for number detection, Key3 for motion detection
 # active-low, KEY1=M15, KEY2=M16, KEY3=E16.
 set_location_assignment PIN_M15 -to key1_n
 set_location_assignment PIN_M16 -to key2_n
@@ -215,7 +168,10 @@ set_global_assignment -name VERILOG_FILE rtl/top/dvp_test_top.v
 set_global_assignment -name VERILOG_FILE rtl/camera_capture/dvp_capture.v
 set_global_assignment -name VERILOG_FILE rtl/camera_init/ov5640_reg_table.v
 set_global_assignment -name VERILOG_FILE rtl/camera_init/ov5640_init.v
-# ============ SDRAM (AX4010 manual p.16-17) ============
+set_global_assignment -name VERILOG_FILE rtl/vision/bnn/bnn_core.v
+set_global_assignment -name VERILOG_FILE rtl/top/bnn_demo_top.v
+
+# ============ SDRAM ============
 set_global_assignment -name VERILOG_FILE rtl/sdram/sdram_ctrl.v
 set_global_assignment -name VERILOG_FILE rtl/top/sdram_test_top.v
 set_global_assignment -name ENABLE_SIGNALTAP OFF
@@ -269,7 +225,7 @@ set_global_assignment -name VERILOG_FILE rtl/top/camera_display_top.v
 set_global_assignment -name POWER_PRESET_COOLING_SOLUTION "23 MM HEAT SINK WITH 200 LFPM AIRFLOW"
 set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
 
-# ============ SD card (SPI mode, manual p.25) ============
+# ============ SD card ============
 set_global_assignment -name VERILOG_FILE rtl/sd/sd_spi.v
 set_global_assignment -name VERILOG_FILE rtl/sd/sd_ctrl.v
 set_global_assignment -name VERILOG_FILE rtl/top/sd_test_top.v
@@ -287,13 +243,6 @@ set_global_assignment -name VERILOG_FILE rtl/vision/tracking/seq_divider.v
 set_global_assignment -name VERILOG_FILE rtl/vision/tracking/kalman_1d.v
 set_global_assignment -name VERILOG_FILE rtl/vision/tracking/color_blob_tracker.v
 set_global_assignment -name VERILOG_FILE rtl/vision/tracking/overlay_marker.v
-# motion_detector.v / motion_overlay.v: no longer instantiated in
-# camera_display_top.v (per user request -- it never fed into the tracker
-# anyway, just an independent overlay). Files kept in the repo, just not
-# part of this build; uncomment to bring back.
-# set_global_assignment -name VERILOG_FILE rtl/vision/tracking/motion_detector.v
-# set_global_assignment -name VERILOG_FILE rtl/vision/tracking/motion_overlay.v
-
 set_global_assignment -name VERILOG_FILE rtl/ui/button_debounce.v
 set_global_assignment -name VERILOG_FILE rtl/ui/display_mode_select.v
 set_global_assignment -name VERILOG_FILE rtl/vision/sobel/gaussian_blur3x3.v
@@ -301,33 +250,13 @@ set_global_assignment -name VERILOG_FILE rtl/vision/sobel/sobel_edge.v
 set_global_assignment -name VERILOG_FILE rtl/vision/sobel/nms_thresh.v
 set_global_assignment -name VERILOG_FILE rtl/vision/barcode/ean13_decoder.v
 # key2 history: threshold_binarize.v (plain B/W) -> barcode_decoder.v
-# (Code 39) -> ean13_decoder.v (current). Real testing showed retail
-# packaging is EAN-13/UPC-A, not Code 39, so barcode_decoder.v got the
-# same treatment threshold_binarize.v got before it: kept in the repo,
-# not part of this build. Uncomment + swap into camera_display_top.v's
-# key2 mux if Code 39 (asset tags etc) or plain B/W is ever wanted again.
 # set_global_assignment -name VERILOG_FILE rtl/vision/barcode/barcode_decoder.v
 # set_global_assignment -name VERILOG_FILE rtl/vision/barcode/threshold_binarize.v
 
-# Camera -> BNN -> on-board 7-segment display pipeline: roi_binarize_28x28.v
-# crops+downsamples a fixed 224x224 center ROI of the live 480x272 frame
-# into the 28x28 binary image bnn_core.v expects, one frame at a time;
-# seg7_decoder.v turns bnn_core.v's digit_out into a 7-segment pattern
-# (common anode, active-low -- confirmed by user). Both instantiated in
-# camera_display_top.v as an always-on background classifier, independent
-# of the key1/2/3 display-mode mux. See CLAUDE.md for the ROI math and the
-# 8x8-block-OR downsample rationale.
+# ============ bnn ============
 set_global_assignment -name VERILOG_FILE rtl/vision/bnn/roi_binarize_28x28.v
 set_global_assignment -name VERILOG_FILE rtl/vision/bnn/seg7_decoder.v
 
-# AX4010 on-board 6-digit 7-segment display, pin table from the AX4010
-# manual p.31 "Digital tube pin assignment" (user provided the table
-# directly). DIG[7:0] = {dp,g,f,e,d,c,b,a}, shared segment lines across
-# all 6 digit positions. SEL[5:0] = per-digit enable, one per position.
-# camera_display_top.v only drives digit 0 (SEL[0], rightmost) since we
-# only need to show one classifier result -- no multiplexed scanning.
-# SEL polarity (active-low) is ASSUMED to match DIG's common-anode
-# convention -- not yet confirmed on real hardware, see CLAUDE.md.
 set_location_assignment PIN_R14 -to dig[0]
 set_location_assignment PIN_N16 -to dig[1]
 set_location_assignment PIN_P16 -to dig[2]
