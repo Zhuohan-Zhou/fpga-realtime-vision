@@ -1,4 +1,4 @@
-// dvp_capture.v -- captures OV5640 DVP bus (PCLK/HREF/VSYNC/D[7:0]) and
+// captures OV5640 DVP bus (PCLK/HREF/VSYNC/D[7:0]) and
 // assembles 16-bit pixels. Outputs pixel_data/pixel_valid/frame_vsync.
 module dvp_capture (
     // DVP interface from OV5640

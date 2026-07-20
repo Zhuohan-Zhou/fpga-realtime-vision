@@ -28,7 +28,7 @@ assign key_start_pulse = key_start_d2 & ~key_start_d1;
 wire busy;
 wire done;
 
-CameraCapture u_sccb (
+sccb_master u_sccb (
     .clk      (clk),
     .rst_n    (rst_n),
     .start    (key_start_pulse),

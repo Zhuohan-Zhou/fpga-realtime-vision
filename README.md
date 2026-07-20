@@ -80,7 +80,7 @@ Clock domains: 50MHz (camera SCCB config), 24MHz (camera XCLK), 100MHz (SDRAM), 
 ### Camera bring-up (SCCB / register init)
 | File | Responsibility |
 |---|---|
-| `CameraCapture.v` | Low-level SCCB (I2C-like) byte-write engine |
+| `sccb_master.v` | Low-level SCCB (I2C-like) byte-write engine |
 | `ov5640_init.v` | Power-up/reset sequencer that walks the full register table on boot |
 | `ov5640_reg_table.v` | 253-entry ROM of OV5640 register writes (YUV422 output mode, AEC/AGC, AWB, gamma, lens correction, mirror/flip, etc.) |
 | `cam_init_top.v`, `sccb_top_test.v` | Standalone test tops for bringing up the camera link in isolation |

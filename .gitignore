@@ -43,4 +43,4 @@ __pycache__/
 
 # stray downloaded packages, if any end up here by accident
 *.deb
-代码模块清单.md
+CLAUDE.md

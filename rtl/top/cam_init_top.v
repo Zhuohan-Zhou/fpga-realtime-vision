@@ -1,4 +1,4 @@
-// cam_init_top.v -- OV5640 init test top. PLL -> ov5640_init -> CameraCapture (SCCB master).
+// cam_init_top.v -- OV5640 init test top. PLL -> ov5640_init -> sccb_master.
 // After download, init_done LED should come on after ~3s.
 module cam_init_top (
     input        clk,           // 50MHz system clock  (PIN_E1)
@@ -63,8 +63,8 @@ ov5640_init u_ov5640_init (
 assign cam_rst_n = init_cam_rst_n;
 assign cam_pwdn  = init_cam_pwdn;
 
-// SCCB master (CameraCapture)
-CameraCapture u_sccb (
+// SCCB master
+sccb_master u_sccb (
     .clk      (clk),
     .rst_n    (sys_rst_n),
     .start    (sccb_start),

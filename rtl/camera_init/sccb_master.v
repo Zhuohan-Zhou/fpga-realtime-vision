@@ -1,4 +1,8 @@
-module CameraCapture (
+// In this module, given a device address, a 16-bit register address
+// and a data byte, bit-bang out one complete SCCB write transaction on the wire.
+// IDLE → START → ADDR → REG_H → REG_L → DATA → STOP → FINISH
+
+module sccb_master (
     input        clk,         // 50MHz System CLK
     input        rst_n,       // Reset Signal (low = reset)
     input        start,       // Start trigger: IDLE --> START
@@ -195,7 +199,6 @@ always @(posedge clk or negedge rst_n) begin
     end
 end
 
-// busy / done
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         busy <= 1'b0;

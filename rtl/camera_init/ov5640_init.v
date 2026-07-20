@@ -1,5 +1,6 @@
 // ov5640_init.v -- init sequence controller. Walks the register table ROM
 // and shoots each entry out over the SCCB master. Output: 480x272 @ ~30fps.
+
 module ov5640_init (
     input        clk,          // 50MHz system clock
     input        rst_n,        // system reset (active low)

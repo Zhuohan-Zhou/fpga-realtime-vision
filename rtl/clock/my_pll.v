@@ -1,3 +1,5 @@
+// The clock generator for the whole board.
+
 module my_pll (
     input  inclk0,
     output c0,      // 100MHz          (system / SDRAM logic)

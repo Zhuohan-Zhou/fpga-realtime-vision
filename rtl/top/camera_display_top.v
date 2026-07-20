@@ -47,7 +47,7 @@ module camera_display_top (
 
     // Mode-select buttons (active-low)
     input         key1_n,   // Sobel edge detection
-    input         key2_n,   // threshold binarization
+    input         key2_n,   // BNN digit recognition
     input         key3_n,   // centroid tracking (default)
 
     // On-board AX4010 6-digit 7-segment display -- BNN handwritten-digit
@@ -59,10 +59,7 @@ module camera_display_top (
     // We only need to show one digit (the classifier result), so no
     // multiplexed scanning is needed -- SEL[0] (rightmost digit) is held
     // permanently selected and DIG is driven statically; SEL[1:5] are
-    // held de-selected so the other 5 digits stay dark. This runs as an
-    // always-on background classifier independent of the key1/2/3 mode
-    // mux above -- it doesn't touch final_r/g/b or disp_mode at all, see
-    // the BNN camera pipeline block near the end of this file.
+    // held de-selected so the other 5 digits stay dark.
     output  [7:0] dig,   // {dp,g,f,e,d,c,b,a}, active-low
     output  [5:0] sel    // per-digit enable; polarity assumed active-low
                           // (matches DIG's common-anode convention) --
@@ -104,7 +101,7 @@ ov5640_init u_init (
     .init_done  (init_done)
 );
 
-CameraCapture u_sccb (
+sccb_master u_sccb (
     .clk      (clk),
     .rst_n    (sys_rst_n),
     .start    (sccb_start),
@@ -356,67 +353,16 @@ nms_thresh u_nms (
     .edge_b    (sobel_b)
 );
 
-// key2 was plain black/white threshold_binarize.v, then briefly a Code 39
-// reader (barcode_decoder.v) -- swapped again to EAN-13/UPC-A
-// (ean13_decoder.v) once real testing showed retail packaging (the
-// drink-box case this was built for) is printed in EAN-13/UPC-A, not
-// Code 39. barcode_decoder.v itself is untouched and still in the repo
-// (not instantiated, same treatment as threshold_binarize.v and
-// motion_detector.v/motion_overlay.v below -- qsf lines commented, not
-// deleted) in case Code 39 (asset tags etc) is ever wanted again.
-localparam [10:0] BARCODE_SCAN_ROW = 11'd136;
-
-wire        bc_valid_w;
-wire [51:0] bc_digits_w;
-wire        bc_scan_active_w;
-
-ean13_decoder #(
-    .SCAN_ROW (BARCODE_SCAN_ROW)
-) u_barcode (
-    .clk            (clk_9m),
-    .rst_n          (sys_rst_n),
-    .de             (lcd_de_w),
-    .frame_pulse    (lcd_frame_pulse),
-    .y8             (disp_y),
-    .pixel_x        (pixel_x_w),
-    .pixel_y        (pixel_y_w),
-    .ean_valid      (bc_valid_w),
-    .decoded_digits (bc_digits_w),        // 13 BCD nibbles -- not displayed
-    .scan_active    (bc_scan_active_w)    // yet, see CLAUDE.md
-);
-
-// Sticky "recently decoded" flag so a valid read is visible for longer than
-// ean_valid's single-cycle pulse -- counts down once per LCD frame.
-reg [7:0] bc_hold_cnt;
-always @(posedge clk_9m or negedge sys_rst_n) begin
-    if (!sys_rst_n) begin
-        bc_hold_cnt <= 8'd0;
-    end
-    else if (bc_valid_w) begin
-        bc_hold_cnt <= 8'd90;   // purely visual hold, not timing-critical
-    end
-    else if (lcd_frame_pulse && (bc_hold_cnt != 8'd0)) begin
-        bc_hold_cnt <= bc_hold_cnt - 8'd1;
-    end
-end
-
-// Live image passthrough with a reference line drawn across the scan row:
-// yellow while hunting, green for a short hold right after a valid decode.
-wire       bc_hold_active = (bc_hold_cnt != 8'd0);
-wire [7:0] bc_r = bc_scan_active_w ? (bc_hold_active ? 8'd0 : 8'd255) : disp_r;
-wire [7:0] bc_g = bc_scan_active_w ? 8'd255                          : disp_g;
-wire [7:0] bc_b = bc_scan_active_w ? 8'd0                            : disp_b;
-
 localparam [1:0] MODE_TRACKING = 2'd0,
                   MODE_SOBEL    = 2'd1,
-                  MODE_BINARIZE = 2'd2;   // now the barcode-scan view
+                  MODE_BNN      = 2'd2;
 
-assign final_r = (disp_mode == MODE_SOBEL)    ? sobel_r :
-                  (disp_mode == MODE_BINARIZE) ? bc_r    : ov_r;
-assign final_g = (disp_mode == MODE_SOBEL)    ? sobel_g :
-                  (disp_mode == MODE_BINARIZE) ? bc_g    : ov_g;
-assign final_b = (disp_mode == MODE_SOBEL)    ? sobel_b :
-                  (disp_mode == MODE_BINARIZE) ? bc_b    : ov_b;
+assign final_r = (disp_mode == MODE_SOBEL) ? sobel_r :
+                  (disp_mode == MODE_BNN)   ? disp_r  : ov_r;
+assign final_g = (disp_mode == MODE_SOBEL) ? sobel_g :
+                  (disp_mode == MODE_BNN)   ? disp_g  : ov_g;
+assign final_b = (disp_mode == MODE_SOBEL) ? sobel_b :
+                  (disp_mode == MODE_BNN)   ? disp_b  : ov_b;
 
 // Green reference box around the fixed BNN capture ROI (224x224, centered --
 // same X0/Y0 as roi_binarize_28x28.v's defaults below) drawn on top of
@@ -443,10 +389,6 @@ wire [7:0] disp_final_r = roi_box_pixel ? 8'd0   : final_r;
 wire [7:0] disp_final_g = roi_box_pixel ? 8'd255 : final_g;
 wire [7:0] disp_final_b = roi_box_pixel ? 8'd0   : final_b;
 
-// ---- BNN camera pipeline: live digit -> LG3661BH, always-on background
-// classifier, decoupled from the key1/2/3 display-mode mux above (all
-// three buttons are already spoken for by Sobel/EAN-13/tracking) ----
-//
 // roi_binarize_28x28.v taps the same pixel_x_w/pixel_y_w/disp_y/lcd_de_w/
 // lcd_frame_pulse bus every other pixel-level module here already uses,
 // crops+downsamples the fixed 224x224 center of the frame (user chose the
@@ -505,6 +447,11 @@ always @(posedge clk_9m or negedge sys_rst_n) begin
         bnn_digit        <= 4'd0;
         bnn_result_valid <= 1'b0;
         bnn_ink_ok       <= 1'b0;
+    end
+    else if (disp_mode != MODE_BNN) begin
+        bnn_fsm          <= BNN_IDLE;
+        bnn_start        <= 1'b0;
+        bnn_result_valid <= 1'b0;
     end
     else begin
         bnn_start <= 1'b0;

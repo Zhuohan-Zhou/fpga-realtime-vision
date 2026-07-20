@@ -55,7 +55,7 @@ set_global_assignment -name EDA_GENERATE_FUNCTIONAL_NETLIST OFF -section_id eda_
 set_global_assignment -name EDA_GENERATE_FUNCTIONAL_NETLIST OFF -section_id eda_board_design_symbol
 set_global_assignment -name EDA_GENERATE_FUNCTIONAL_NETLIST OFF -section_id eda_board_design_signal_integrity
 set_global_assignment -name EDA_GENERATE_FUNCTIONAL_NETLIST OFF -section_id eda_board_design_boundary_scan
-set_global_assignment -name VERILOG_FILE rtl/camera_init/CameraCapture.v
+set_global_assignment -name VERILOG_FILE rtl/camera_init/sccb_master.v
 set_location_assignment PIN_M15 -to key_start
 set_location_assignment PIN_F1 -to sccb_scl
 set_location_assignment PIN_F3 -to sccb_sda
@@ -248,7 +248,7 @@ set_global_assignment -name VERILOG_FILE rtl/ui/display_mode_select.v
 set_global_assignment -name VERILOG_FILE rtl/vision/sobel/gaussian_blur3x3.v
 set_global_assignment -name VERILOG_FILE rtl/vision/sobel/sobel_edge.v
 set_global_assignment -name VERILOG_FILE rtl/vision/sobel/nms_thresh.v
-set_global_assignment -name VERILOG_FILE rtl/vision/barcode/ean13_decoder.v
+# set_global_assignment -name VERILOG_FILE rtl/vision/barcode/ean13_decoder.v
 # key2 history: threshold_binarize.v (plain B/W) -> barcode_decoder.v
 # set_global_assignment -name VERILOG_FILE rtl/vision/barcode/barcode_decoder.v
 # set_global_assignment -name VERILOG_FILE rtl/vision/barcode/threshold_binarize.v

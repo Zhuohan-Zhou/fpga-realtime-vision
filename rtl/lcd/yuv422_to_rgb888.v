@@ -3,11 +3,7 @@
 // Input: one 16-bit word per 'de' clock from the read FIFO, alternating
 //   {Y0,U} , {Y1,V}  (dvp_capture packs {1st,2nd} byte)
 // Output: RGB888 pixel, 1-pixel latency (image shifts 1px, harmless)
-//
-// Math (BT.601, fixed point <<8):
-//   R = Y + 1.402(V-128)          = Y + (359*Cr >> 8)
-//   G = Y - 0.344(U-128) - 0.714(V-128) = Y - (88*Cb + 183*Cr >> 8)
-//   B = Y + 1.772(U-128)          = Y + (454*Cb >> 8)
+
 module yuv422_to_rgb888 (
     input             clk,      // LCD pixel clock
     input             rst_n,
@@ -35,6 +31,10 @@ function [7:0] clip;
 endfunction
 
 // converter
+// Math (BT.601, fixed point <<8):
+//   R = Y + 1.402(V-128)          = Y + (359*Cr >> 8)
+//   G = Y - 0.344(U-128) - 0.714(V-128) = Y - (88*Cb + 183*Cr >> 8)
+//   B = Y + 1.772(U-128)          = Y + (454*Cb >> 8)
 function [23:0] conv;
     input [7:0] y;
     input [7:0] u;

@@ -61,7 +61,7 @@ ov5640_init u_init (
 );
 
 // SCCB master
-CameraCapture u_sccb (
+sccb_master u_sccb (
     .clk      (clk),
     .rst_n    (sys_rst_n),
     .start    (sccb_start),

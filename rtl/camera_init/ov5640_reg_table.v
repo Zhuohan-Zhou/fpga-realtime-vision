@@ -1,6 +1,7 @@
 // ov5640_reg_table.v -- OV5640 init register list, 480x272 output.
 // Each entry packs {reg_addr[15:0], data[7:0]} into 24 bits.
-// Note: output is actually YUV422/YUYV, not RGB565 -- see entries below (0x4300/0x501f).
+// Output is actually YUV422/YUYV
+
 module ov5640_reg_table (
     input      [8:0] addr,
     output reg [23:0] data,
@@ -32,21 +33,6 @@ always @(*) begin
         // DVP output enable
         9'd15:  data = {16'h3002, 8'h1c};
         9'd16:  data = {16'h3006, 8'hc3};
-        // FREX / strobe
-        // Horizontal mirror ON (0x3821 bit1+bit2 set, 0x07 vs 0x01) -- user
-        // reported the live image looks mirrored; the sensor's raw readout
-        // apparently comes out mirrored relative to the true scene (this is
-        // common depending on how the module is physically mounted), so we
-        // flip it back at the sensor via this register rather than leaving
-        // it uncorrected. This affects BOTH the LCD preview and the BNN
-        // classifier equally (they read the exact same pixel stream), which
-        // matters because handwritten digits are not left-right symmetric --
-        // an uncorrected mirror would feed bnn_core images it was never
-        // trained on. NOT YET VISUALLY CONFIRMED on real hardware -- after
-        // recompiling, check that text/handwriting held up to the camera
-        // reads normally (not backwards) on the LCD; if it's backwards the
-        // OTHER way now, revert this byte back to 0x01 (also update the
-        // duplicate entry near the end of this table, see below).
         9'd17:  data = {16'h3821, 8'h07};  // horizontal mirror ON
         9'd18:  data = {16'h3820, 8'h41};  // vertical flip off (unchanged)
         // Timing and resolution: 480x272
@@ -273,10 +259,6 @@ always @(*) begin
         9'd223: data = {16'h4741, 8'h00};
         // DVP PCLK divider
         9'd224: data = {16'h3824, 8'h02};
-        // Mirror ON / flip off -- this is the FINAL write to these two
-        // registers (applied after the output-window setup above, and
-        // right before power-on below), so this is the value that actually
-        // sticks; keep in sync with the 0x3821 change near entry 17 above.
         9'd225: data = {16'h3821, 8'h07};
         9'd226: data = {16'h3820, 8'h41};
         // Power on
