@@ -166,13 +166,6 @@ Clock domains: 50MHz (camera SCCB config), 24MHz (camera XCLK), 100MHz (SDRAM), 
 | `edge_threshold_tuner.py` | Interactive Sobel/edge threshold tuning using a PC webcam, before committing values to RTL |
 | `opencv_edge_compare.py` | Compares the FPGA's Sobel output against an OpenCV reference implementation |
 
-### Reference material
-| File | Responsibility |
-|---|---|
-| `Alinx AX4010 User Manual.pdf` | Board manual — pin tables, digital tube wiring, connector pinouts |
-| `CNN in tiny FPGAs.pdf` | Background reading for the BNN sub-project |
-| `FPGA运动目标检测跟踪系统.pdf` | Background reading for the tracking/motion-detection work |
-
 ### Docs
 | File | Responsibility |
 |---|---|

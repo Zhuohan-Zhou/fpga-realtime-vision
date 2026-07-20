@@ -55,11 +55,11 @@ set_global_assignment -name EDA_GENERATE_FUNCTIONAL_NETLIST OFF -section_id eda_
 set_global_assignment -name EDA_GENERATE_FUNCTIONAL_NETLIST OFF -section_id eda_board_design_symbol
 set_global_assignment -name EDA_GENERATE_FUNCTIONAL_NETLIST OFF -section_id eda_board_design_signal_integrity
 set_global_assignment -name EDA_GENERATE_FUNCTIONAL_NETLIST OFF -section_id eda_board_design_boundary_scan
-set_global_assignment -name VERILOG_FILE CameraCapture.v
+set_global_assignment -name VERILOG_FILE rtl/camera_init/CameraCapture.v
 set_location_assignment PIN_M15 -to key_start
 set_location_assignment PIN_F1 -to sccb_scl
 set_location_assignment PIN_F3 -to sccb_sda
-set_global_assignment -name VERILOG_FILE sccb_top_test.v
+set_global_assignment -name VERILOG_FILE rtl/top/sccb_top_test.v
 set_global_assignment -name SDC_FILE CameraCapture.sdc
 set_global_assignment -name USE_SIGNALTAP_FILE stp1.stp
 set_global_assignment -name SIGNALTAP_FILE stp1.stp
@@ -91,10 +91,10 @@ set_location_assignment PIN_R4 -to lcd_b[4]
 set_location_assignment PIN_T5 -to lcd_b[5]
 set_location_assignment PIN_R5 -to lcd_b[6]
 set_location_assignment PIN_T6 -to lcd_b[7]
-set_global_assignment -name SDC_FILE lcd_top.sdc
-set_global_assignment -name VERILOG_FILE lcd_driver.v
-set_global_assignment -name VERILOG_FILE lcd_top.v
-set_global_assignment -name VERILOG_FILE my_pll.v
+set_global_assignment -name SDC_FILE rtl/top/lcd_top.sdc
+set_global_assignment -name VERILOG_FILE rtl/lcd/lcd_driver.v
+set_global_assignment -name VERILOG_FILE rtl/top/lcd_top.v
+set_global_assignment -name VERILOG_FILE rtl/clock/my_pll.v
 
 
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to clk -entity sccb_top_test
@@ -108,7 +108,7 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[0] -entity sccb_
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[1] -entity sccb_top_test
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[2] -entity sccb_top_test
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[3] -entity sccb_top_test
-set_global_assignment -name VERILOG_FILE cam_init_top.v
+set_global_assignment -name VERILOG_FILE rtl/top/cam_init_top.v
 # Switched back to camera_display_top for the camera->BNN->7-segment
 # integration work (roi_binarize_28x28.v/seg7_decoder.v below). Leftover
 # from the bnn_demo_top real-hardware validation run further down this
@@ -132,7 +132,7 @@ set_global_assignment -name TOP_LEVEL_ENTITY camera_display_top
 #      here -- confirmed real Analysis & Synthesis results after the
 #      row-memory rewrite: 2,860 LE / ~28% of the 10,320 LE budget, down
 #      from the first version's 5,776 LE. See CLAUDE.md.)
-set_global_assignment -name VERILOG_FILE bnn_core.v
+set_global_assignment -name VERILOG_FILE rtl/vision/bnn/bnn_core.v
 
 # bnn_demo_top.v (real-hardware validation demo for bnn_core.v, its own
 # standalone top-level, separate from both camera_display_top and the
@@ -158,7 +158,7 @@ set_global_assignment -name VERILOG_FILE bnn_core.v
 # clk/rst_n/key1_n/led all reuse the SAME global (non -entity-scoped) pin
 # assignments already below (PIN_E1/PIN_N13/PIN_M15/PIN_E10,F9,C9,D9) --
 # no new location/IO_STANDARD assignments needed for this module.
-set_global_assignment -name VERILOG_FILE bnn_demo_top.v
+set_global_assignment -name VERILOG_FILE rtl/top/bnn_demo_top.v
 
 set_location_assignment PIN_E1 -to clk
 set_location_assignment PIN_N13 -to rst_n
@@ -211,13 +211,13 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[0] -entity cam_i
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[1] -entity cam_init_top
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[2] -entity cam_init_top
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[3] -entity cam_init_top
-set_global_assignment -name VERILOG_FILE dvp_test_top.v
-set_global_assignment -name VERILOG_FILE dvp_capture.v
-set_global_assignment -name VERILOG_FILE ov5640_reg_table.v
-set_global_assignment -name VERILOG_FILE ov5640_init.v
+set_global_assignment -name VERILOG_FILE rtl/top/dvp_test_top.v
+set_global_assignment -name VERILOG_FILE rtl/camera_capture/dvp_capture.v
+set_global_assignment -name VERILOG_FILE rtl/camera_init/ov5640_reg_table.v
+set_global_assignment -name VERILOG_FILE rtl/camera_init/ov5640_init.v
 # ============ SDRAM (AX4010 manual p.16-17) ============
-set_global_assignment -name VERILOG_FILE sdram_ctrl.v
-set_global_assignment -name VERILOG_FILE sdram_test_top.v
+set_global_assignment -name VERILOG_FILE rtl/sdram/sdram_ctrl.v
+set_global_assignment -name VERILOG_FILE rtl/top/sdram_test_top.v
 set_global_assignment -name ENABLE_SIGNALTAP OFF
 set_location_assignment PIN_B14 -to sdram_clk
 set_location_assignment PIN_F16 -to sdram_cke
@@ -262,52 +262,52 @@ set_location_assignment PIN_L15 -to sdram_dq[15]
 set_global_assignment -name CYCLONEII_RESERVE_NCEO_AFTER_CONFIGURATION "USE AS REGULAR IO"
 
 
-set_global_assignment -name VERILOG_FILE pixel_fifo.v
-set_global_assignment -name VERILOG_FILE frame_buffer.v
-set_global_assignment -name VERILOG_FILE camera_display_top.v
+set_global_assignment -name VERILOG_FILE rtl/sdram/pixel_fifo.v
+set_global_assignment -name VERILOG_FILE rtl/sdram/frame_buffer.v
+set_global_assignment -name VERILOG_FILE rtl/top/camera_display_top.v
 
 set_global_assignment -name POWER_PRESET_COOLING_SOLUTION "23 MM HEAT SINK WITH 200 LFPM AIRFLOW"
 set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
 
 # ============ SD card (SPI mode, manual p.25) ============
-set_global_assignment -name VERILOG_FILE sd_spi.v
-set_global_assignment -name VERILOG_FILE sd_ctrl.v
-set_global_assignment -name VERILOG_FILE sd_test_top.v
+set_global_assignment -name VERILOG_FILE rtl/sd/sd_spi.v
+set_global_assignment -name VERILOG_FILE rtl/sd/sd_ctrl.v
+set_global_assignment -name VERILOG_FILE rtl/top/sd_test_top.v
 set_location_assignment PIN_D11 -to sd_cs_n
 set_location_assignment PIN_D12 -to sd_clk
 set_location_assignment PIN_F10 -to sd_mosi
 set_location_assignment PIN_E15 -to sd_miso
 
 
-set_global_assignment -name VERILOG_FILE lcd_pattern_top.v
-set_global_assignment -name VERILOG_FILE yuv422_to_rgb888.v
+set_global_assignment -name VERILOG_FILE rtl/top/lcd_pattern_top.v
+set_global_assignment -name VERILOG_FILE rtl/lcd/yuv422_to_rgb888.v
 
 
-set_global_assignment -name VERILOG_FILE seq_divider.v
-set_global_assignment -name VERILOG_FILE kalman_1d.v
-set_global_assignment -name VERILOG_FILE color_blob_tracker.v
-set_global_assignment -name VERILOG_FILE overlay_marker.v
+set_global_assignment -name VERILOG_FILE rtl/vision/tracking/seq_divider.v
+set_global_assignment -name VERILOG_FILE rtl/vision/tracking/kalman_1d.v
+set_global_assignment -name VERILOG_FILE rtl/vision/tracking/color_blob_tracker.v
+set_global_assignment -name VERILOG_FILE rtl/vision/tracking/overlay_marker.v
 # motion_detector.v / motion_overlay.v: no longer instantiated in
 # camera_display_top.v (per user request -- it never fed into the tracker
 # anyway, just an independent overlay). Files kept in the repo, just not
 # part of this build; uncomment to bring back.
-# set_global_assignment -name VERILOG_FILE motion_detector.v
-# set_global_assignment -name VERILOG_FILE motion_overlay.v
+# set_global_assignment -name VERILOG_FILE rtl/vision/tracking/motion_detector.v
+# set_global_assignment -name VERILOG_FILE rtl/vision/tracking/motion_overlay.v
 
-set_global_assignment -name VERILOG_FILE button_debounce.v
-set_global_assignment -name VERILOG_FILE display_mode_select.v
-set_global_assignment -name VERILOG_FILE gaussian_blur3x3.v
-set_global_assignment -name VERILOG_FILE sobel_edge.v
-set_global_assignment -name VERILOG_FILE nms_thresh.v
-set_global_assignment -name VERILOG_FILE ean13_decoder.v
+set_global_assignment -name VERILOG_FILE rtl/ui/button_debounce.v
+set_global_assignment -name VERILOG_FILE rtl/ui/display_mode_select.v
+set_global_assignment -name VERILOG_FILE rtl/vision/sobel/gaussian_blur3x3.v
+set_global_assignment -name VERILOG_FILE rtl/vision/sobel/sobel_edge.v
+set_global_assignment -name VERILOG_FILE rtl/vision/sobel/nms_thresh.v
+set_global_assignment -name VERILOG_FILE rtl/vision/barcode/ean13_decoder.v
 # key2 history: threshold_binarize.v (plain B/W) -> barcode_decoder.v
 # (Code 39) -> ean13_decoder.v (current). Real testing showed retail
 # packaging is EAN-13/UPC-A, not Code 39, so barcode_decoder.v got the
 # same treatment threshold_binarize.v got before it: kept in the repo,
 # not part of this build. Uncomment + swap into camera_display_top.v's
 # key2 mux if Code 39 (asset tags etc) or plain B/W is ever wanted again.
-# set_global_assignment -name VERILOG_FILE barcode_decoder.v
-# set_global_assignment -name VERILOG_FILE threshold_binarize.v
+# set_global_assignment -name VERILOG_FILE rtl/vision/barcode/barcode_decoder.v
+# set_global_assignment -name VERILOG_FILE rtl/vision/barcode/threshold_binarize.v
 
 # Camera -> BNN -> on-board 7-segment display pipeline: roi_binarize_28x28.v
 # crops+downsamples a fixed 224x224 center ROI of the live 480x272 frame
@@ -317,8 +317,8 @@ set_global_assignment -name VERILOG_FILE ean13_decoder.v
 # camera_display_top.v as an always-on background classifier, independent
 # of the key1/2/3 display-mode mux. See CLAUDE.md for the ROI math and the
 # 8x8-block-OR downsample rationale.
-set_global_assignment -name VERILOG_FILE roi_binarize_28x28.v
-set_global_assignment -name VERILOG_FILE seg7_decoder.v
+set_global_assignment -name VERILOG_FILE rtl/vision/bnn/roi_binarize_28x28.v
+set_global_assignment -name VERILOG_FILE rtl/vision/bnn/seg7_decoder.v
 
 # AX4010 on-board 6-digit 7-segment display, pin table from the AX4010
 # manual p.31 "Digital tube pin assignment" (user provided the table
