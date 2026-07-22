@@ -1,39 +1,3 @@
-// barcode_decoder.v -- Code 39 barcode reader, digits 0-9 only, single
-// fixed scanline.
-//
-// Deliberately does NOT track a moving object the way color_blob_tracker.v
-// does. A conveyor-line barcode reader normally works the opposite way:
-// the camera/scan zone stays put and the product carries the barcode
-// through it, so every frame can be decoded completely independently --
-// no cross-frame prediction, no search window, nothing to "lose track of".
-// That sidesteps the fast/erratic-motion problems discussed for the
-// centroid tracker; the real speed limit here is motion blur from the
-// sensor's own exposure time, not this logic (see CLAUDE.md).
-//
-// Per frame, scans ONE fixed row (SCAN_ROW):
-//   luma < THRESH -> "bar" (dark), else "space" (light)
-//   run-length encode consecutive same-color pixels along that row
-//   classify each completed run as narrow/wide by comparing its pixel
-//     length against WIDE_THRESH -- a fixed absolute threshold, which
-//     assumes the barcode's on-screen size stays roughly constant (true
-//     for a fixed camera-to-belt distance on a real line; needs retuning
-//     if that distance changes)
-//
-// Code 39: every character (digit 0-9, or the start/stop "*") is 9
-// elements -- 5 bars + 4 spaces, alternating, exactly 3 of the 9 wide.
-// The narrow/wide patterns in decode_digit() below are the verified
-// reference encoding, cross-checked against the lookup table in a
-// widely-used open-source barcode library (python-barcode), not
-// hand-derived from memory. Characters are separated by one extra narrow
-// space that isn't part of the 9-element pattern -- S_SKIP_GAP consumes it.
-//
-// V1 scope: digits only (no letters/symbols), single scanline (no
-// multi-row voting/averaging for robustness), fixed absolute width
-// threshold (no adaptive per-scan module-width estimation). Decoded
-// digits come out as raw ports for SignalTap / driving further logic;
-// on-screen rendering of the actual digit text isn't built yet --
-// camera_display_top.v just tints the reference scanline to show
-// searching vs. a fresh valid decode.
 module barcode_decoder #(
     parameter [10:0] SCAN_ROW    = 11'd136,  // which row to scan (~vertical center, 272-tall panel)
     parameter [7:0]  THRESH      = 8'd128,   // luma threshold: below = bar(dark), else = space(light)

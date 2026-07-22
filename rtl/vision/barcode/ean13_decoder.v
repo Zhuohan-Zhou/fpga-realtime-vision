@@ -1,59 +1,3 @@
-// ean13_decoder.v -- EAN-13 / UPC-A barcode reader, single fixed scanline.
-//
-// Replaces barcode_decoder.v (Code 39) on key2: real retail packaging
-// (the drink-box case this was built for) is printed in EAN-13/UPC-A, not
-// Code 39 -- Code 39 is an industrial/logistics symbology (asset tags,
-// badges), essentially never seen on consumer goods. UPC-A needs no
-// separate handling: it's formatted as EAN-13 with an implied leading
-// digit of 0 (LEFT_PATTERN[0] = all-A), so an EAN-13 decoder reads UPC-A
-// barcodes correctly with zero extra logic.
-//
-// Same "fixed scan zone, no cross-frame state" philosophy as
-// barcode_decoder.v (see that file's header for the production-line
-// rationale) -- frame_pulse wipes all state, every frame is decoded from
-// scratch.
-//
-// -------------------------------------------------------------------
-// Why this is a bigger module than Code 39: Code 39 only has two width
-// classes (narrow/wide) and a fixed absolute pixel threshold was good
-// enough. EAN-13 packs each digit into 7 modules split across 4 runs,
-// where each run can be 1, 2, 3 or 4 modules wide (all in the *same*
-// physical module width X) -- a single narrow/wide split can't represent
-// that. Instead this module estimates X dynamically, once per scan, from
-// the start guard pattern "101" (3 modules, each exactly 1X): the 3 guard
-// runs are checked for being mutually close in width (ratio test, no
-// division: 2*max <= 3*min), and if so their average becomes X_est
-// (approximated as sum*683>>11 =~ sum/3, cheap single-cycle shift-add,
-// avoids a division for something computed on a hot path). Every
-// subsequent run is then classified into 1..4 modules by comparing
-// 2*run_width against 3*X_est/5*X_est/7*X_est (i.e. the 1.5X/2.5X/3.5X
-// bucket boundaries, cross-multiplied by 2 to dodge fractional math).
-//
-// Structure decoded (95 modules total):
-//   start guard "101" (3) -> 6 left digits x 7 modules (42) -> middle
-//   guard "01010" (5) -> 6 right digits x 7 modules (42) -> end guard
-//   "101" (3)
-// Left digits use one of two 10-entry code tables (called "A"/"B" below,
-// matching the standard's own naming) selected per-digit; which A/B
-// pattern was used across all 6 left digits implies the leading (13th,
-// never-directly-encoded) digit via a reverse lookup table. Right digits
-// use a single table ("C"). All three tables plus the A/B-pattern-to-
-// leading-digit table were pulled from python-barcode's
-// barcode/charsets/ean.py (same verification approach as Code 39's
-// tables in barcode_decoder.v) and converted to run-length tuples with a
-// small script -- not hand-derived from memory. Verified uniqueness: all
-// 20 left (A+B) run-tuples are distinct, all 10 right run-tuples are
-// distinct.
-//
-// Checksum: the standard's own weighted mod-10 check (weight 1 on the
-// digit itself + digits 2,4 positions later, weight 3 on the others) is
-// verified before ean_valid is allowed to pulse -- this is effectively
-// free once all 13 digits are decoded, and it's real protection against a
-// misclassified run silently producing a plausible-looking wrong number,
-// which the 1.5X-style thresholding can't fully rule out on its own.
-// Also gated on the left digits' A/B pattern actually being one of the
-// 10 legal LEFT_PATTERN combinations (out of 2^6=64 possible), not just
-// "each individual digit decoded to something".
 module ean13_decoder #(
     parameter [10:0] SCAN_ROW      = 11'd136,
     parameter [7:0]  THRESH        = 8'd128,
@@ -188,13 +132,6 @@ reg [3:0] leading_digit;
 always @* begin
     leading_digit = 4'd0;
     leading_valid = 1'b0;
-    // parity_bits[digit_idx] holds each left digit's A/B choice, digit0 at
-    // the LSB -- so these literals list bit5(digit5)..bit0(digit0), i.e.
-    // the LEFT_PATTERN string reversed before mapping A/B to 0/1 (caught
-    // via simulation: the first version of this table assumed digit0 was
-    // the MSB, matching how python-barcode prints the pattern string
-    // left-to-right, which silently disagreed with how the hardware
-    // register actually indexes -- see tb_ean13_decoder.v run notes).
     case (parity_bits)
         6'b000000: begin leading_digit = 4'd0; leading_valid = 1'b1; end  // AAAAAA
         6'b110100: begin leading_digit = 4'd1; leading_valid = 1'b1; end  // AABABB

@@ -19,38 +19,9 @@ module nms_thresh #(
     output     [7:0]  edge_b
 );
 
-// Non-max suppression: a real edge's gradient magnitude doesn't jump from
-// 0 to a spike and back to 0 -- it ramps up across a few pixels, peaks
-// right on the edge, then ramps back down, like a hill (blurring widens
-// the hill further). Plain thresholding lights up the whole hill wherever
-// it's above the bar, which is exactly why lowering EDGE_THRESH alone
-// made lines thicker: more of each hill's shoulder cleared the bar.
-//
-// The fix: for every pixel, look at its own gradient direction (computed
-// in sobel_edge.v) and compare its magnitude against ONLY the two
-// neighbors that lie along that direction (i.e. perpendicular to the
-// edge, which is the direction the hill actually rises and falls along).
-// Keep it only if it's >= both -- the local peak of its own hill. Every
-// other pixel on the same hill loses to a neighbor closer to the true
-// peak and gets suppressed to 0 before the threshold is even applied.
-// Net effect: edges come out a consistent ~1px wide regardless of how low
-// EDGE_THRESH is set, same as OpenCV's Canny.
-//
-// Architecture mirrors sobel_edge.v: registered (synchronous) line-buffer
-// reads so this maps to M9K instead of eating LEs, and a delay chain so
-// write-back and the shift register work off signals that consistently
-// lag the live inputs by one cycle.
-
 reg [12:0] mline_a [0:WIDTH-1];   // row N-2 magnitude
 reg [12:0] mline_b [0:WIDTH-1];   // row N-1 magnitude
-reg [1:0]  dline_b [0:WIDTH-1];   // row N-1 direction -- NMS only ever needs
-                                   // the CENTER pixel's own direction to pick
-                                   // its two neighbors, and the center tap
-                                   // always lands on row N-1, so that's the
-                                   // only row direction needs to be buffered
-                                   // for at all (rows N-2/N never get looked
-                                   // up as a "center").
-
+reg [1:0]  dline_b [0:WIDTH-1];   // row N-1 direction 
 integer init_i;
 initial begin
     for (init_i = 0; init_i < WIDTH; init_i = init_i + 1) begin
@@ -100,10 +71,6 @@ always @(posedge clk) begin
     end
 end
 
-// 3x3 magnitude window, same layout convention as sobel_edge.v's luma
-// window (m0=top row, m1=mid row, m2=bottom row; d2=left...d0=right).
-// dird2/dird1/dird0 shifts in lockstep with the mid row (m1) specifically,
-// since m1d1 is the window's center and dird1 is its matching direction.
 reg [12:0] m0d2, m0d1, m0d0;
 reg [12:0] m1d2, m1d1, m1d0;
 reg [12:0] m2d2, m2d1, m2d0;
@@ -124,11 +91,7 @@ always @(posedge clk or negedge rst_n) begin
     end
 end
 
-// center = m1d1 (mid row, mid col); cdir = its own gradient direction.
-// Neighbor layout relative to the center:
-//   m0d2 m0d1 m0d0        TL   UP   TR
-//   m1d2 m1d1 m1d0    =   L   ctr   R
-//   m2d2 m2d1 m2d0        BL  DOWN  BR
+
 wire [1:0] cdir = dird1;
 
 wire [12:0] nbr_a = (cdir == 2'd0) ? m1d2 :   // horizontal grad: left
@@ -141,12 +104,6 @@ wire [12:0] nbr_b = (cdir == 2'd0) ? m1d0 :   // horizontal grad: right
                      (cdir == 2'd1) ? m2d2 :   // diag "/":        bottom-left
                                        m2d0;    // diag "\":        bottom-right
 
-// Asymmetric compare (strict on one side, non-strict on the other) so a
-// hard, single-sample step edge -- where the Sobel response can come out
-// exactly tied between two adjacent pixels -- still picks exactly one
-// winner instead of keeping both (verified against tb_integration_nms.v,
-// which chains the real sobel_edge.v into this module and hit exactly
-// that tie on a synthetic step edge).
 wire is_local_max = (m1d1 > nbr_a) && (m1d1 >= nbr_b);
 wire [12:0] suppressed_mag = is_local_max ? m1d1 : 13'd0;
 

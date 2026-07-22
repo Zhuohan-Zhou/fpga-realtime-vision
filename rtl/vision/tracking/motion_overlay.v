@@ -1,6 +1,3 @@
-// motion_overlay.v -- tints pixels inside a "changed" motion cell with a
-// ~50% yellow wash (average with solid yellow) so the moving region shows
-// without hiding the image underneath. Combinational, just shifts + add.
 module motion_overlay (
     input             highlight,
 

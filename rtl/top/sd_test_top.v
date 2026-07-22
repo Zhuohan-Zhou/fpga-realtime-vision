@@ -1,10 +1,3 @@
-// sd_test_top.v -- SD card interface self-test (no camera needed).
-// After card init, writes 8 test blocks starting at block 2048 (1MB offset,
-// safely past any partition table remnants). Pattern: byte = byte_index[7:0]
-// ^ block_number[7:0]. Verify on PC with sd_dump.py --verify.
-//
-// LEDs: [0]=card init done  [1]=all 8 blocks written OK
-//       [2]=error (read err code via SignalTap if lit)  [3]=heartbeat
 module sd_test_top (
     input        clk,          // 50MHz (PIN_E1)
     input        rst_n,        // (PIN_N13)
@@ -93,10 +86,6 @@ always @(posedge clk or negedge rst_n)
     if (!rst_n) hb <= 26'd0;
     else        hb <= hb + 1'b1;
 
-// Normal:  led0=init_done, led1=all written, led2=0, led3=heartbeat
-// On error: LEDs show err code in binary (led3=MSB ... led0=LSB):
-//   0001=CMD0 no resp  0010=CMD8 fail  0011=ACMD41 timeout
-//   0100=write resp bad  0101=write busy timeout
 assign led = (err != 4'd0) ? err
            : {hb[25], 1'b0, (tstate == 2'd2), init_done};
 

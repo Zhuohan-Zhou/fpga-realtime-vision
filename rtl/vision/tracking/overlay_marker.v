@@ -1,6 +1,3 @@
-// overlay_marker.v -- draws a bright green crosshair over the live video at
-// (cx, cy). Purely combinational, slots between yuv422_to_rgb888's output
-// and lcd_driver's input, same pixel_x/pixel_y sweep as the rest of the path.
 module overlay_marker #(
     parameter CROSS_HALF_LEN = 10,  // arm length in pixels
     parameter LINE_THICK     = 1    // half-thickness in pixels

@@ -45,10 +45,13 @@ module camera_display_top (
     // Status LEDs
     output  [3:0] led,
 
-    // Mode-select buttons (active-low)
-    input         key1_n,   // Sobel edge detection
-    input         key2_n,   // BNN digit recognition
-    input         key3_n,   // centroid tracking (default)
+    // Buttons (active-low) -- currently unused: runtime KEY1/2/3 mode
+    // switching was removed in favor of a single compile-time-selected
+    // algorithm (see "ACTIVE ALGORITHM SLOT" below). Kept as ports so
+    // CameraCapture.qsf's existing pin assignments for them stay valid.
+    input         key1_n,
+    input         key2_n,
+    input         key3_n,
 
     // On-board AX4010 6-digit 7-segment display -- BNN handwritten-digit
     // output. Per the AX4010 manual's "Digital tube pin assignment" table
@@ -137,15 +140,14 @@ wire  [7:0] disp_r, disp_g, disp_b, disp_y;
 
 wire [7:0] lcd_r_i, lcd_g_i, lcd_b_i;
 wire [10:0] pixel_x_w, pixel_y_w;
-wire [7:0]  ov_r, ov_g, ov_b;
-wire [7:0]  final_r, final_g, final_b;
+wire [7:0]  algo_r, algo_g, algo_b;   // driven by whichever algorithm is active below
 
 lcd_driver u_lcd (
     .pclk    (clk_9m),
     .rst_n   (sys_rst_n),
-    .data_r  (disp_final_r),
-    .data_g  (disp_final_g),
-    .data_b  (disp_final_b),
+    .data_r  (disp_final2_r),
+    .data_g  (disp_final2_g),
+    .data_b  (disp_final2_b),
     .lcd_clk (lcd_clk),
     .lcd_hs  (lcd_hs),
     .lcd_vs  (lcd_vs_w),
@@ -219,150 +221,138 @@ yuv422_to_rgb888 u_conv (
     .y8    (disp_y)
 );
 
-// Motion detector removed from this path (per user request): it never fed
-// into the tracker anyway, just an independent yellow-tint overlay
-// composited alongside it. Module files (motion_detector.v/motion_overlay.v)
-// are kept in the repo and still buildable via their own instance
-// elsewhere if wanted later, just not instantiated here -- also frees up
-// whatever LAB/M9K they were using.
-
-// Color-threshold blob tracker (centroid of matching pixels), now with
-// Kalman-filtered position/velocity + outlier rejection instead of plain
-// EMA smoothing -- see color_blob_tracker.v's header for why. R_LO..B_HI
-// defaults live in color_blob_tracker.v, tune for whatever object color
-// you're tracking.
-wire        blob_found_w, blob_cx_valid_w;
-wire [10:0] blob_cx_w, blob_cy_w;
-wire [17:0] blob_pixels_w;   // hook up to SignalTap to tune thresholds
-
-color_blob_tracker u_blob (
-    .clk         (clk_9m),
-    .rst_n       (sys_rst_n),
-    .de          (lcd_de_w),
-    .frame_pulse (lcd_frame_pulse),
-    .r8          (disp_r),
-    .g8          (disp_g),
-    .b8          (disp_b),
-    .pixel_x     (pixel_x_w),
-    .pixel_y     (pixel_y_w),
-    .cx          (blob_cx_w),
-    .cy          (blob_cy_w),
-    .blob_found  (blob_found_w),
-    .cx_valid    (blob_cx_valid_w),
-    .blob_pixels (blob_pixels_w)
-);
-
-// Crosshair overlay at the tracked centroid, straight over the live image
-// now (used to go through motion_overlay's tint first).
-overlay_marker u_overlay (
-    .pixel_x    (pixel_x_w),
-    .pixel_y    (pixel_y_w),
-    .cx         (blob_cx_w),
-    .cy         (blob_cy_w),
-    .blob_found (blob_found_w),
-    .in_r       (disp_r),
-    .in_g       (disp_g),
-    .in_b       (disp_b),
-    .out_r      (ov_r),
-    .out_g      (ov_g),
-    .out_b      (ov_b)
-);
-
-// Display mode select (3 buttons): key1 -> Sobel, key2 -> threshold
-// binarize, key3 -> centroid tracking (default). All three paths run
-// continuously in parallel -- cheap enough, and avoids clock-enable/reset
-// gymnastics -- only the final mux picks what actually reaches the screen.
+// ============================================================================
+// ACTIVE ALGORITHM SLOT
 //
-// Sobel re-enabled: the LAB overflow (858/645) was actually caused by
-// sobel_edge.v's and motion_detector.v's memory reads being coded as
-// combinational (`wire = arr[idx]`), which can't map to M9K regardless of
-// ramstyle since M9K's read port is physically synchronous-only -- Quartus
-// was building an LE-based fake memory instead. Both modules now use
-// registered reads. Re-verify the LAB count after this recompile.
-wire [1:0] disp_mode;
+// Only ONE algorithm runs at a time now -- on an FPGA, an instantiated
+// module is real hardware from power-on regardless of whether anything
+// ever looks at its output, so the old "all 3 modes running in parallel,
+// button just picks which one reaches the screen" design meant Sobel and
+// centroid tracking were both permanently burning LE even when you were
+// looking at the other one (confirmed via Resource Utilization by Entity:
+// e.g. the whole non-BNN, non-base-pipeline chunk was ~3900+ LE). To
+// switch algorithms now: comment out the active block below, uncomment
+// the one you want, update the matching VERILOG_FILE line(s) in
+// CameraCapture.qsf to match (comment out the ones you're switching away
+// from, uncomment the ones you're switching to), then recompile+reflash.
+// Every block drives the same algo_r/g/b so whichever one is active feeds
+// the rest of the display chain (ROI box overlay, then lcd_driver) the
+// same way. key1_n/key2_n/key3_n are currently unused -- no runtime mode
+// switching anymore -- kept as ports so CameraCapture.qsf's existing pin
+// assignments for them don't need touching; free to repurpose per-algorithm
+// later (e.g. bnn_demo_top.v-style test-image cycling, ROI recenter, etc).
+// ============================================================================
 
-display_mode_select u_mode (
-    .clk    (clk_9m),
-    .rst_n  (sys_rst_n),
-    .key1_n (key1_n),
-    .key2_n (key2_n),
-    .key3_n (key3_n),
-    .mode   (disp_mode)
-);
+// ---- ACTIVE: BNN handwritten-digit recognition ----
+// BNN doesn't touch the live video feed itself (see the BNN classification
+// block further down, and roi_binarize_28x28/bnn_img_viz below) -- it just
+// runs the digital-tube result and the debug 28x28 viz block. Plain
+// passthrough video here.
+assign algo_r = disp_r;
+assign algo_g = disp_g;
+assign algo_b = disp_b;
 
-// Gaussian blur ahead of Sobel: a bare gradient-magnitude threshold makes
-// an independent edge/no-edge call at every pixel, so any spot where local
-// contrast dips even briefly (sensor noise, soft lighting) breaks the
-// line -- smoothing first is the same reason a real Canny pipeline blurs
-// before it differentiates.
-wire [7:0]  blur_y8;
-wire [10:0] blur_px, blur_py;
-wire        blur_de;
+// ---- Sobel edge detection (KEY1's old mode) ----
+// Uncomment this block + comment out the BNN block above + swap the qsf
+// VERILOG_FILE lines for gaussian_blur3x3.v/sobel_edge.v/nms_thresh.v
+// (uncomment) and roi_binarize_28x28.v/bnn_img_viz.v/bnn_core.v/
+// seg7_decoder.v (comment out, unless you want BNN classification to also
+// keep running in the background -- it can coexist with any video-mode
+// algorithm below since it doesn't touch algo_r/g/b, just costs LE).
+//
+// wire [7:0]  blur_y8;
+// wire [10:0] blur_px, blur_py;
+// wire        blur_de;
+//
+// gaussian_blur3x3 u_blur (
+//     .clk (clk_9m), .rst_n (sys_rst_n), .de (lcd_de_w), .y8_in (disp_y),
+//     .pixel_x (pixel_x_w), .pixel_y (pixel_y_w),
+//     .y8_out (blur_y8), .pixel_x_out (blur_px), .pixel_y_out (blur_py), .de_out (blur_de)
+// );
+//
+// wire [12:0] sobel_mag;
+// wire [1:0]  sobel_dir;
+// wire [10:0] sobel_px, sobel_py;
+// wire        sobel_de;
+//
+// sobel_edge u_sobel (
+//     .clk (clk_9m), .rst_n (sys_rst_n), .de (blur_de), .y8 (blur_y8),
+//     .pixel_x (blur_px), .pixel_y (blur_py),
+//     .magnitude (sobel_mag), .direction (sobel_dir),
+//     .pixel_x_out (sobel_px), .pixel_y_out (sobel_py), .de_out (sobel_de)
+// );
+//
+// nms_thresh u_nms (
+//     .clk (clk_9m), .rst_n (sys_rst_n), .de (sobel_de),
+//     .magnitude (sobel_mag), .direction (sobel_dir),
+//     .pixel_x (sobel_px), .pixel_y (sobel_py),
+//     .edge_r (algo_r), .edge_g (algo_g), .edge_b (algo_b)
+// );
 
-gaussian_blur3x3 u_blur (
-    .clk         (clk_9m),
-    .rst_n       (sys_rst_n),
-    .de          (lcd_de_w),
-    .y8_in       (disp_y),
-    .pixel_x     (pixel_x_w),
-    .pixel_y     (pixel_y_w),
-    .y8_out      (blur_y8),
-    .pixel_x_out (blur_px),
-    .pixel_y_out (blur_py),
-    .de_out      (blur_de)
-);
+// ---- Centroid tracking (KEY3's old default mode) ----
+// Uncomment + comment out BNN block + swap qsf lines for
+// color_blob_tracker.v/kalman_1d.v/seq_divider.v/overlay_marker.v.
+//
+// wire        blob_found_w, blob_cx_valid_w;
+// wire [10:0] blob_cx_w, blob_cy_w;
+// wire [17:0] blob_pixels_w;   // hook up to SignalTap to tune thresholds
+//
+// color_blob_tracker u_blob (
+//     .clk (clk_9m), .rst_n (sys_rst_n), .de (lcd_de_w), .frame_pulse (lcd_frame_pulse),
+//     .r8 (disp_r), .g8 (disp_g), .b8 (disp_b),
+//     .pixel_x (pixel_x_w), .pixel_y (pixel_y_w),
+//     .cx (blob_cx_w), .cy (blob_cy_w),
+//     .blob_found (blob_found_w), .cx_valid (blob_cx_valid_w), .blob_pixels (blob_pixels_w)
+// );
+//
+// overlay_marker u_overlay (
+//     .pixel_x (pixel_x_w), .pixel_y (pixel_y_w),
+//     .cx (blob_cx_w), .cy (blob_cy_w), .blob_found (blob_found_w),
+//     .in_r (disp_r), .in_g (disp_g), .in_b (disp_b),
+//     .out_r (algo_r), .out_g (algo_g), .out_b (algo_b)
+// );
 
-// Sobel now only computes the raw gradient (magnitude + a quantized
-// direction); nms_thresh.v does non-max suppression along that direction
-// before thresholding. Plain "magnitude > threshold" used to light up the
-// whole shoulder of a real edge's gradient hill, not just the peak, which
-// is why lowering EDGE_THRESH alone made lines thicker -- NMS keeps only
-// each hill's local peak first, so line width stays ~1px regardless of
-// where the threshold is set (verified in tb_integration_nms.v).
-wire [12:0] sobel_mag;
-wire [1:0]  sobel_dir;
-wire [10:0] sobel_px, sobel_py;
-wire        sobel_de;
+// ---- EAN-13/UPC-A barcode decoding (KEY2's older mode, pre-BNN) ----
+// Uncomment + comment out BNN block + swap qsf line for
+// rtl/vision/barcode/ean13_decoder.v (uncomment). Visual feedback: scan
+// row drawn yellow while hunting, green for a few frames after a valid
+// decode (add a hold counter like the old design if you want the green
+// to persist longer than one frame -- ean_valid is only a 1-cycle pulse).
+//
+// wire        ean_valid;
+// wire [51:0] ean_digits;   // 13x4-bit BCD, unused here, hook to SignalTap/seg7 if wanted
+// wire        ean_scan_active;
+//
+// ean13_decoder u_ean13 (
+//     .clk (clk_9m), .rst_n (sys_rst_n), .de (lcd_de_w), .frame_pulse (lcd_frame_pulse),
+//     .y8 (disp_y), .pixel_x (pixel_x_w), .pixel_y (pixel_y_w),
+//     .ean_valid (ean_valid), .decoded_digits (ean_digits), .scan_active (ean_scan_active)
+// );
+//
+// assign algo_r = ean_scan_active ? (ean_valid ? 8'd0   : 8'd255) : disp_r;
+// assign algo_g = ean_scan_active ? 8'd255                        : disp_g;
+// assign algo_b = ean_scan_active ? (ean_valid ? 8'd0   : 8'd0)   : disp_b;
 
-sobel_edge u_sobel (
-    .clk         (clk_9m),
-    .rst_n       (sys_rst_n),
-    .de          (blur_de),
-    .y8          (blur_y8),
-    .pixel_x     (blur_px),
-    .pixel_y     (blur_py),
-    .magnitude   (sobel_mag),
-    .direction   (sobel_dir),
-    .pixel_x_out (sobel_px),
-    .pixel_y_out (sobel_py),
-    .de_out      (sobel_de)
-);
-
-wire [7:0] sobel_r, sobel_g, sobel_b;
-
-nms_thresh u_nms (
-    .clk       (clk_9m),
-    .rst_n     (sys_rst_n),
-    .de        (sobel_de),
-    .magnitude (sobel_mag),
-    .direction (sobel_dir),
-    .pixel_x   (sobel_px),
-    .pixel_y   (sobel_py),
-    .edge_r    (sobel_r),
-    .edge_g    (sobel_g),
-    .edge_b    (sobel_b)
-);
-
-localparam [1:0] MODE_TRACKING = 2'd0,
-                  MODE_SOBEL    = 2'd1,
-                  MODE_BNN      = 2'd2;
-
-assign final_r = (disp_mode == MODE_SOBEL) ? sobel_r :
-                  (disp_mode == MODE_BNN)   ? disp_r  : ov_r;
-assign final_g = (disp_mode == MODE_SOBEL) ? sobel_g :
-                  (disp_mode == MODE_BNN)   ? disp_g  : ov_g;
-assign final_b = (disp_mode == MODE_SOBEL) ? sobel_b :
-                  (disp_mode == MODE_BNN)   ? disp_b  : ov_b;
+// ---- Motion detection (independent of tracking, tints changed cells) ----
+// Uncomment + comment out BNN block + swap qsf lines for
+// motion_detector.v/motion_overlay.v.
+//
+// wire       motion_highlight;
+// wire       motion_detected_w;
+// wire [8:0] motion_changed_blocks_w;   // debug: hook to SignalTap
+//
+// motion_detector u_motion (
+//     .clk (clk_9m), .rst_n (sys_rst_n), .de (lcd_de_w), .frame_pulse (lcd_frame_pulse),
+//     .y8 (disp_y), .pixel_x (pixel_x_w), .pixel_y (pixel_y_w),
+//     .highlight (motion_highlight),
+//     .motion_detected (motion_detected_w), .changed_blocks (motion_changed_blocks_w)
+// );
+//
+// motion_overlay u_motion_ov (
+//     .highlight (motion_highlight),
+//     .in_r (disp_r), .in_g (disp_g), .in_b (disp_b),
+//     .out_r (algo_r), .out_g (algo_g), .out_b (algo_b)
+// );
 
 // Green reference box around the fixed BNN capture ROI (224x224, centered --
 // same X0/Y0 as roi_binarize_28x28.v's defaults below) drawn on top of
@@ -385,9 +375,9 @@ wire roi_box_on_rt   = (pixel_x_w <= ROI_BOX_X1) && (pixel_x_w > ROI_BOX_X1 - RO
 wire roi_box_pixel   = (roi_box_in_x && (roi_box_on_top || roi_box_on_bot)) ||
                         (roi_box_in_y && (roi_box_on_left || roi_box_on_rt));
 
-wire [7:0] disp_final_r = roi_box_pixel ? 8'd0   : final_r;
-wire [7:0] disp_final_g = roi_box_pixel ? 8'd255 : final_g;
-wire [7:0] disp_final_b = roi_box_pixel ? 8'd0   : final_b;
+wire [7:0] disp_final_r = roi_box_pixel ? 8'd0   : algo_r;
+wire [7:0] disp_final_g = roi_box_pixel ? 8'd255 : algo_g;
+wire [7:0] disp_final_b = roi_box_pixel ? 8'd0   : algo_b;
 
 // roi_binarize_28x28.v taps the same pixel_x_w/pixel_y_w/disp_y/lcd_de_w/
 // lcd_frame_pulse bus every other pixel-level module here already uses,
@@ -410,6 +400,35 @@ roi_binarize_28x28 u_roi (
     .img_out     (bnn_img),
     .ink_count   (bnn_ink_count)
 );
+
+// Debug view: draw the actual 28x28 image roi_binarize_28x28 just produced
+// -- the same bits bnn_core classifies -- blown up onto the LCD, so you
+// can see exactly what's being fed to the network instead of only seeing
+// the digital-tube result. Runs regardless of key1/2/3 mode, same as
+// u_roi itself; placed at (360,80)-(472,192), clear of the green ROI box
+// (which ends at x=351) and fully on-screen (480x272 panel).
+wire viz_pixel, viz_bit;
+
+bnn_img_viz #(.VIZ_X0(11'd360), .VIZ_Y0(11'd80), .SCALE(4)) u_bnn_viz (
+    .clk       (clk_9m),
+    .rst_n     (sys_rst_n),
+    .img_valid (bnn_img_valid),
+    .img_in    (bnn_img),
+    .pixel_x   (pixel_x_w),
+    .pixel_y   (pixel_y_w),
+    .viz_pixel (viz_pixel),
+    .viz_bit   (viz_bit)
+);
+
+// viz_bit=1 means "ink" (roi_binarize_28x28's dark=1 convention) -- draw
+// black to match what the ink looks like on the actual paper; 0 (background)
+// draws white. Layered on top of disp_final_r/g/b (which already has the
+// green ROI box baked in), so this always wins inside its own box.
+wire [7:0] viz_gray = viz_bit ? 8'd0 : 8'd255;
+
+wire [7:0] disp_final2_r = viz_pixel ? viz_gray : disp_final_r;
+wire [7:0] disp_final2_g = viz_pixel ? viz_gray : disp_final_g;
+wire [7:0] disp_final2_b = viz_pixel ? viz_gray : disp_final_b;
 
 // Small FSM: kick off one bnn_core classification each time roi_binarize
 // finishes a fresh frame, wait for it to finish (~1040 cycles at clk_9m,
@@ -447,11 +466,6 @@ always @(posedge clk_9m or negedge sys_rst_n) begin
         bnn_digit        <= 4'd0;
         bnn_result_valid <= 1'b0;
         bnn_ink_ok       <= 1'b0;
-    end
-    else if (disp_mode != MODE_BNN) begin
-        bnn_fsm          <= BNN_IDLE;
-        bnn_start        <= 1'b0;
-        bnn_result_valid <= 1'b0;
     end
     else begin
         bnn_start <= 1'b0;

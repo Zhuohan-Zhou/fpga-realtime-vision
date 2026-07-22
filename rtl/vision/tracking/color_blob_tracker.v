@@ -1,33 +1,4 @@
-// color_blob_tracker.v -- streaming color-threshold blob detection +
-// Kalman-filtered centroid tracking (v3).
-//
-// v1 was per-pixel RGB threshold -> frame-sum -> divide once per frame.
-// v2 added EMA smoothing plus a search window locked onto the last
-// position. v3 replaces the EMA with two independent 1D steady-state
-// Kalman ("alpha-beta") filters (kalman_1d.v), one per axis, which buys
-// two real improvements over EMA:
-//
-//  1) A motion model. EMA just blends toward the new measurement by a
-//     fixed fraction every frame, with no notion of "which way is it
-//     moving". The Kalman filters track position AND velocity, so the
-//     predicted position for the next frame extrapolates along the
-//     target's actual heading instead of always lagging behind it, and
-//     the search window (now centered on that prediction, not the last
-//     smoothed position) tracks ahead of a moving target.
-//
-//  2) Outlier rejection. If a same-color object other than the tracked
-//     one appears (e.g. a face showing up inside the same red threshold
-//     bracket used for a red object), its raw centroid can be far from
-//     where the real target is predicted to be. gate_reject below checks
-//     the (Manhattan) distance between the raw measurement and the
-//     current prediction once we're actually locked onto something; too
-//     far and the measurement is ignored for this frame -- the filters
-//     just coast on their motion model instead of snapping to the
-//     distractor. This is what actually fixes the crosshair jumping
-//     between objects; Kalman smoothing alone would not have.
-//
-// Runs in clk_9m, tapping the same r8/g8/b8 (post yuv422_to_rgb888) and
-// pixel_x/pixel_y (from lcd_driver) that already feed the display.
+
 module color_blob_tracker #(
     parameter [7:0]  R_LO = 8'd140,   // default: bracket for a red object
     parameter [7:0]  R_HI = 8'd255,
@@ -68,9 +39,6 @@ wire in_range = (r8 >= R_LO) && (r8 <= R_HI) &&
                 (g8 >= G_LO) && (g8 <= G_HI) &&
                 (b8 >= B_LO) && (b8 <= B_HI);
 
-// search-window gate: full frame when not locked on, a box around the
-// KALMAN PREDICTION for this frame once we are -- ahead of a moving
-// target instead of centered on where it was last seen.
 wire signed [11:0] wdx = $signed({1'b0, pixel_x}) - $signed({1'b0, pred_x});
 wire signed [11:0] wdy = $signed({1'b0, pixel_y}) - $signed({1'b0, pred_y});
 wire signed [11:0] win_half_s = $signed({1'b0, WINDOW_HALF});
@@ -119,10 +87,7 @@ seq_divider #(.WIDTH(32)) u_div (
     .quotient (div_quotient)
 );
 
-// Two independent axis filters. Both always receive the SAME predict/
-// update/accept/force_reset pulses -- the accept/reject decision below is
-// computed once, from both axes together (real 2D distance), not as two
-// per-axis decisions that could disagree about the same detection.
+
 reg        k_predict, k_update, k_accept, k_reset;
 reg [10:0] mx_reg, my_reg;
 
@@ -153,12 +118,6 @@ reg [31:0] cap_sum_y;
 reg [17:0] cap_count;
 reg [7:0]  miss_streak;
 
-// Outlier gate: is this frame's raw color centroid anywhere near where the
-// tracked target is predicted to be? L1 (Manhattan) distance -- avoids a
-// square root, same city-block-distance approximation used for the Sobel
-// magnitude elsewhere in this project. Only applied once actually locked
-// on (blob_found) -- while reacquiring after a loss there's no prediction
-// worth trusting yet, so take whatever's found.
 wire signed [11:0] gdx = $signed({1'b0, mx_reg}) - $signed({1'b0, pred_x});
 wire signed [11:0] gdy = $signed({1'b0, my_reg}) - $signed({1'b0, pred_y});
 wire        [11:0] gdx_abs = gdx[11] ? (~gdx + 12'd1) : gdx;
@@ -248,8 +207,6 @@ always @(posedge clk or negedge rst_n) begin
             end
 
             S_NO_MEAS: begin
-                // no color match at all this frame -- coast on the motion
-                // model rather than freezing or vanishing outright.
                 k_update <= 1'b1;
                 k_accept <= 1'b0;
                 k_reset  <= 1'b0;

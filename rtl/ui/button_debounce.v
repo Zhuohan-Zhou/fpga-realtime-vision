@@ -1,7 +1,3 @@
-// button_debounce.v -- debounces one active-low mechanical button, emits a
-// clean 1-cycle "pressed" pulse. Samples the (2-flop synced) raw pin at
-// ~1kHz, needs 8 consecutive samples (~8ms) of the same level before
-// accepting it as stable. Generic, works for any clk_9m-derived button.
 module button_debounce #(
     parameter integer CLK_HZ  = 9_000_000,
     parameter integer TICK_HZ = 1_000

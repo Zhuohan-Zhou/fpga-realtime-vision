@@ -1,12 +1,3 @@
-// sdram_test_top.v -- SDRAM self-test for AX4010 (W9825G6KH-6 /
-// HY57V2562GTR compatible).
-//
-// Sequence: wait for controller init -> write 130,560 words of test pattern
-// into buffer 0 -> read back and compare, count errors -> repeat for
-// buffer 1 (ping-pong bank) -> report on LEDs.
-//
-// LEDs: [0]=SDRAM init done (test started)  [1]=test done, PASS (err_cnt==0)
-//       [2]=test done, FAIL (err_cnt!=0)  [3]=heartbeat (~0.7Hz, proves clk_100m alive)
 module sdram_test_top (
     input         clk,          // 50MHz (PIN_E1)
     input         rst_n,        // reset (PIN_N13)

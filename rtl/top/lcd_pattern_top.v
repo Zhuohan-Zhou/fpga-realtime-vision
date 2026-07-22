@@ -1,14 +1,3 @@
-// lcd_pattern_top.v -- LCD quality diagnostic patterns.
-// Cycles through 8 test screens (~4.4s each), LED[2:0] = screen #.
-//  0: horizontal gray gradient, RGB888 full precision
-//  1: same gradient, RGB565-quantized (mimics camera data path)
-//  2: radial (concentric) gradient, RGB888
-//  3: radial gradient, RGB565-quantized -- should reproduce the "concentric
-//     rings" seen with the camera IF rings come from 565 quantization;
-//     if screen 2 also shows rings, blame the LCD instead
-//  4: 1-px checkerboard (top) + 1-px vertical stripes (bottom), sharpness test
-//  5: 8 saturated color bars
-//  6: full white   7: full black  (uniformity / backlight check)
 module lcd_pattern_top (
     input        clk,          // 50MHz (PIN_E1)
     input        rst_n,        // (PIN_N13)

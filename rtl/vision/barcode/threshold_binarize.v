@@ -1,5 +1,3 @@
-// threshold_binarize.v -- plain luma threshold: white if y8 >= THRESH, else
-// black. Combinational, no line buffer/history needed (unlike Sobel).
 module threshold_binarize #(
     parameter [7:0] THRESH = 8'd128
 )(

@@ -1,7 +1,3 @@
-// seq_divider.v -- unsigned restoring divider (shift-subtract), WIDTH
-// cycles per division. Used by color_blob_tracker for centroid = sum/count
-// once per frame; plenty of idle clk_9m cycles during blanking, so slow
-// and cheap beats a combinational divider here.
 module seq_divider #(
     parameter WIDTH = 32
 )(

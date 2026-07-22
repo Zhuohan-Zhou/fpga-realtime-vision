@@ -239,15 +239,18 @@ set_global_assignment -name VERILOG_FILE rtl/top/lcd_pattern_top.v
 set_global_assignment -name VERILOG_FILE rtl/lcd/yuv422_to_rgb888.v
 
 
-set_global_assignment -name VERILOG_FILE rtl/vision/tracking/seq_divider.v
-set_global_assignment -name VERILOG_FILE rtl/vision/tracking/kalman_1d.v
-set_global_assignment -name VERILOG_FILE rtl/vision/tracking/color_blob_tracker.v
-set_global_assignment -name VERILOG_FILE rtl/vision/tracking/overlay_marker.v
-set_global_assignment -name VERILOG_FILE rtl/ui/button_debounce.v
-set_global_assignment -name VERILOG_FILE rtl/ui/display_mode_select.v
-set_global_assignment -name VERILOG_FILE rtl/vision/sobel/gaussian_blur3x3.v
-set_global_assignment -name VERILOG_FILE rtl/vision/sobel/sobel_edge.v
-set_global_assignment -name VERILOG_FILE rtl/vision/sobel/nms_thresh.v
+# Disabled 2026-07-21: single-active-algorithm switch to BNN (see
+# camera_display_top.v's "ACTIVE ALGORITHM SLOT"). Uncomment the relevant
+# lines here when switching camera_display_top.v back to one of these.
+# set_global_assignment -name VERILOG_FILE rtl/vision/tracking/seq_divider.v
+# set_global_assignment -name VERILOG_FILE rtl/vision/tracking/kalman_1d.v
+# set_global_assignment -name VERILOG_FILE rtl/vision/tracking/color_blob_tracker.v
+# set_global_assignment -name VERILOG_FILE rtl/vision/tracking/overlay_marker.v
+# set_global_assignment -name VERILOG_FILE rtl/ui/button_debounce.v
+# set_global_assignment -name VERILOG_FILE rtl/ui/display_mode_select.v
+# set_global_assignment -name VERILOG_FILE rtl/vision/sobel/gaussian_blur3x3.v
+# set_global_assignment -name VERILOG_FILE rtl/vision/sobel/sobel_edge.v
+# set_global_assignment -name VERILOG_FILE rtl/vision/sobel/nms_thresh.v
 # set_global_assignment -name VERILOG_FILE rtl/vision/barcode/ean13_decoder.v
 # key2 history: threshold_binarize.v (plain B/W) -> barcode_decoder.v
 # set_global_assignment -name VERILOG_FILE rtl/vision/barcode/barcode_decoder.v
@@ -256,6 +259,7 @@ set_global_assignment -name VERILOG_FILE rtl/vision/sobel/nms_thresh.v
 # ============ bnn ============
 set_global_assignment -name VERILOG_FILE rtl/vision/bnn/roi_binarize_28x28.v
 set_global_assignment -name VERILOG_FILE rtl/vision/bnn/seg7_decoder.v
+set_global_assignment -name VERILOG_FILE rtl/vision/bnn/bnn_img_viz.v
 
 set_location_assignment PIN_R14 -to dig[0]
 set_location_assignment PIN_N16 -to dig[1]

@@ -1,10 +1,3 @@
-// display_mode_select.v -- three buttons -> one debounced 2-bit mode reg.
-//   key1 -> MODE_SOBEL     (Sobel edge detection)
-//   key2 -> MODE_BINARIZE  (luma threshold binarization)
-//   key3 -> MODE_TRACKING  (default: normal video + color/motion tracking
-//                           overlays, the project's original main feature)
-// Powers up in MODE_TRACKING. Most recently pressed button wins; if two
-// land the same cycle, key1 > key2 > key3 (arbitrary but deterministic).
 module display_mode_select (
     input        clk,      // clk_9m
     input        rst_n,

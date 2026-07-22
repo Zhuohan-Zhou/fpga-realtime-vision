@@ -1,21 +1,3 @@
-// seg7_decoder.v -- digit (0-9) -> 7-segment pattern, for the LG3661BH tube.
-//
-// User-confirmed hardware: LG3661BH is COMMON ANODE, and segment pins are
-// ACTIVE-LOW (pin driven low = that segment lights; high = off). Default
-// ACTIVE_LOW=1 matches that; set to 0 if this is ever reused on a
-// common-cathode display instead.
-//
-// Segment bit order: seg[6:0] = {a, b, c, d, e, f, g} (seg[6]=a .. seg[0]=g),
-// standard layout:
-//        a
-//      f   b
-//        g
-//      e   c
-//        d
-//
-// digit_valid gates the output: when low, all segments are forced OFF
-// (blank display) rather than showing a stale/garbage digit -- e.g. before
-// the first camera-fed classification has completed.
 module seg7_decoder #(
     parameter ACTIVE_LOW = 1
 )(
