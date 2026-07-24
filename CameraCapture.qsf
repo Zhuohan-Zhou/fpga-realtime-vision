@@ -246,7 +246,7 @@ set_global_assignment -name VERILOG_FILE rtl/lcd/yuv422_to_rgb888.v
 # set_global_assignment -name VERILOG_FILE rtl/vision/tracking/kalman_1d.v
 # set_global_assignment -name VERILOG_FILE rtl/vision/tracking/color_blob_tracker.v
 # set_global_assignment -name VERILOG_FILE rtl/vision/tracking/overlay_marker.v
-# set_global_assignment -name VERILOG_FILE rtl/ui/button_debounce.v
+set_global_assignment -name VERILOG_FILE rtl/ui/button_debounce.v
 # set_global_assignment -name VERILOG_FILE rtl/ui/display_mode_select.v
 # set_global_assignment -name VERILOG_FILE rtl/vision/sobel/gaussian_blur3x3.v
 # set_global_assignment -name VERILOG_FILE rtl/vision/sobel/sobel_edge.v
@@ -375,5 +375,6 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sdram_we_n
 set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id To
 set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id To
 set_global_assignment -name PARTITION_COLOR 16764057 -section_id To
+
 
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id To

@@ -45,10 +45,8 @@ module camera_display_top (
     // Status LEDs
     output  [3:0] led,
 
-    // Buttons (active-low) -- currently unused: runtime KEY1/2/3 mode
-    // switching was removed in favor of a single compile-time-selected
-    // algorithm (see "ACTIVE ALGORITHM SLOT" below). Kept as ports so
-    // CameraCapture.qsf's existing pin assignments for them stay valid.
+    // Buttons are active-low. KEY1 captures one ROI frame for BNN
+    // classification; KEY2/KEY3 are currently unused.
     input         key1_n,
     input         key2_n,
     input         key3_n,
@@ -237,10 +235,8 @@ yuv422_to_rgb888 u_conv (
 // from, uncomment the ones you're switching to), then recompile+reflash.
 // Every block drives the same algo_r/g/b so whichever one is active feeds
 // the rest of the display chain (ROI box overlay, then lcd_driver) the
-// same way. key1_n/key2_n/key3_n are currently unused -- no runtime mode
-// switching anymore -- kept as ports so CameraCapture.qsf's existing pin
-// assignments for them don't need touching; free to repurpose per-algorithm
-// later (e.g. bnn_demo_top.v-style test-image cycling, ROI recenter, etc).
+// same way. Runtime display-mode switching is disabled. KEY1 is reused by
+// the BNN capture button below; KEY2/KEY3 remain available for later use.
 // ============================================================================
 
 // ---- ACTIVE: BNN handwritten-digit recognition ----
@@ -430,13 +426,11 @@ wire [7:0] disp_final2_r = viz_pixel ? viz_gray : disp_final_r;
 wire [7:0] disp_final2_g = viz_pixel ? viz_gray : disp_final_g;
 wire [7:0] disp_final2_b = viz_pixel ? viz_gray : disp_final_b;
 
-// Small FSM: kick off one bnn_core classification each time roi_binarize
-// finishes a fresh frame, wait for it to finish (~1040 cycles at clk_9m,
-// well within a single frame period), latch the result, go back to
-// waiting for the next img_valid. bnn_img is only sampled the one cycle
-// bnn_core latches image_in right after start -- by then there's a full
-// vertical-blanking-plus-24-lines margin before roi_binarize's img_mem
-// starts getting overwritten by the next frame, so no torn-frame risk.
+// KEY1 requests one classification. The request is held until roi_binarize
+// finishes a complete fresh frame, then bnn_core runs once (~64000 clk_9m
+// cycles). The displayed result remains unchanged until the next KEY1 press.
+// bnn_img is sampled only right after start, before ROI storage is overwritten
+// by the next frame, so no torn-frame risk.
 //
 // bnn_core has no "reject/unknown" class -- it always argmaxes to some
 // digit 0-9, even fed a nearly-blank ROI (empty paper/background), so the
@@ -451,13 +445,24 @@ wire [7:0] disp_final2_b = viz_pixel ? viz_gray : disp_final_b;
 // THRESH/ROI size already flagged in CLAUDE.md.
 localparam [1:0]  BNN_IDLE = 2'd0, BNN_START = 2'd1, BNN_WAIT = 2'd2;
 localparam [15:0] MIN_INK_PIXELS = 16'd150;
+wire bnn_capture_pressed;
 reg [1:0] bnn_fsm;
 reg       bnn_start;
 reg       bnn_result_valid;
 reg       bnn_ink_ok;
+reg       bnn_capture_pending;
 reg [3:0] bnn_digit;
 wire      bnn_done;
 wire [3:0] bnn_digit_out;
+
+// Synchronise the asynchronous button and reject contact bounce. One press
+// produces exactly one pending capture request.
+button_debounce u_bnn_capture_button (
+    .clk     (clk_9m),
+    .rst_n   (sys_rst_n),
+    .raw_n   (key1_n),
+    .pressed (bnn_capture_pressed)
+);
 
 always @(posedge clk_9m or negedge sys_rst_n) begin
     if (!sys_rst_n) begin
@@ -466,13 +471,17 @@ always @(posedge clk_9m or negedge sys_rst_n) begin
         bnn_digit        <= 4'd0;
         bnn_result_valid <= 1'b0;
         bnn_ink_ok       <= 1'b0;
+        bnn_capture_pending <= 1'b0;
     end
     else begin
         bnn_start <= 1'b0;
+        if (bnn_capture_pressed)
+            bnn_capture_pending <= 1'b1;
         case (bnn_fsm)
             BNN_IDLE: begin
-                if (bnn_img_valid) begin
+                if (bnn_img_valid && bnn_capture_pending) begin
                     bnn_ink_ok <= (bnn_ink_count >= MIN_INK_PIXELS);
+                    bnn_capture_pending <= 1'b0;
                     bnn_fsm    <= BNN_START;
                 end
             end

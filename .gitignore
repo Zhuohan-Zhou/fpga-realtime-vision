@@ -41,6 +41,10 @@ Thumbs.db
 __pycache__/
 *.pyc
 
+# Reproducible ML inputs and generated BNN weights
+data/
+artifacts/
+
 # stray downloaded packages, if any end up here by accident
 *.deb
 CLAUDE.md

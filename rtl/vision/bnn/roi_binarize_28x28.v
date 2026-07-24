@@ -1,7 +1,7 @@
 module roi_binarize_28x28 #(
     parameter [10:0] ROI_X0  = 11'd128,
     parameter [10:0] ROI_Y0  = 11'd24,
-    parameter [7:0]  THRESH  = 8'd100   // y8 < THRESH => "dark" (ink stroke)
+    parameter [7:0]  THRESH  = 8'd120   // y8 < THRESH => "dark" (ink stroke)
 )(
     input             clk,          // clk_9m
     input             rst_n,        // sys_rst_n
